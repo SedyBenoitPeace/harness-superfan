@@ -6,8 +6,15 @@ subagent, model, cache use, tool calls, time. Built to watch runs of the
 [Agent Harness Kit](https://github.com/SedyBenoitPeace/agent-harness-kit), but
 the parser works on any Claude Code or Codex session.
 
-Read-only on your logs: it opens them and prints. The one thing it writes is
-a review you ask for, saved outside the repo (see Reviews). Python 3.10+, standard library only.
+It only reads your logs and run reports. The one place it writes, and the
+only place it deletes, is its own reviews folder (see Reviews). Python 3.10+,
+standard library only. 
+## Platforms
+
+Tested on macOS. The code is standard-library Python and Claude Code and
+Codex keep their logs in the same places on Linux, so it should work there,
+but that is untested. Windows is untested. Automatic reviews use launchd
+(macOS); on Linux use cron or a systemd timer.
 
 ## Use
 
@@ -48,7 +55,8 @@ applies to the whole page:
   two buttons on the home page ask across every session in the window and
   harness filter (totals, the 40 largest sessions, the breakdown, findings).
 - **Reviews** tab: run a review of one day, one run or a custom window (see
-  below), and read the saved ones, newest first, with a Download .md button.
+  below), and read the saved ones, newest first, with Download .md and
+  Delete, plus "delete reviews older than N days".
 - **Where tokens go**, one card per harness; click a kind of work for the
   commands and files behind it, the sessions, and the largest single outputs.
 
@@ -91,7 +99,11 @@ the model is missing the numbers are still saved.
 Each review is saved as `<date-time>-<scope>.md` plus a `.json` of the
 numbers in `~/.superfan/reviews` (or `$SUPERFAN_REVIEWS`, or `--reviews DIR`).
 Keep that folder outside any repository: reviews describe your own sessions
-and projects. The page's Reviews tab runs the same command and lists the
+and projects. Delete one from the page, or old ones with
+`superfan review --prune 30` or the page's "older than N days". `--keep-days N`
+(on `review` and `serve`) deletes reviews older than N days after each new
+one; it is off by default. Deleting only touches files named like a review
+in that folder, never logs or run reports. The page's Reviews tab runs the same command and lists the
 same folder.
 
 ### Automatic reviews (optional, macOS)

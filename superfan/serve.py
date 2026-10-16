@@ -1,7 +1,7 @@
 """A local web page for the Superfan: `python3 -m superfan serve`.
 
 Listens on 127.0.0.1 only and reads log folders as the user running it.
-The only files it writes are reviews you ask for, in the reviews folder
+The only files it writes or deletes are reviews, in the reviews folder
 (~/.superfan/reviews by default, outside any repository). The only thing that
 leaves the machine is the optional "Ask" or "Run review" request, which sends
 numbers and command names (no transcript) to the local `claude` or `codex` CLI,
@@ -120,7 +120,7 @@ def make_handler(cfg: dict):
                     "reports": [{"id": rid, "name": os.path.basename(p), "project": os.path.basename(
                         os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(p)))))}
                                 for rid, p in review.latest_reports(cfg["reports"])],
-                    "today": datetime.now(cfg["tz"]).date().isoformat()})
+                    "today": datetime.now(cfg["tz"]).date().isoformat(), "keep_days": cfg.get("keep_days") or 0})
             if url.path == "/api/review":
                 text = review.load(q.get("name", [""])[0], cfg.get("reviews"))
                 if text is None:
@@ -179,6 +179,18 @@ def make_handler(cfg: dict):
                 except Exception as e:
                     return self._json(500, {"error": repr(e)})
                 return self._json(200, {"name": r["name"], "markdown": r["markdown"], "errors": r["errors"]})
+            if url.path == "/api/reviews/delete":
+                # Only ever touches the reviews folder, and only files named like a review.
+                if body.get("name"):
+                    ok = review.delete(str(body["name"]), cfg.get("reviews"))
+                    return self._json(200 if ok else 404, {"deleted": [body["name"]] if ok else [], **({} if ok else {"error": "No such review."})})
+                try:
+                    days = float(body.get("older_than_days"))
+                except (TypeError, ValueError):
+                    return self._json(400, {"error": "Say how many days to keep."})
+                if days < 1:
+                    return self._json(400, {"error": "Keep at least 1 day."})
+                return self._json(200, {"deleted": review.prune(days, cfg.get("reviews"))})
             if url.path == "/api/ask":
                 sid = str(body.get("session") or "")
                 question = str(body.get("question") or "What can I improve in this session?")[:1000]

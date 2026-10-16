@@ -141,7 +141,8 @@ def _cfg(a: argparse.Namespace) -> dict:
             "reports": [os.path.expanduser(d) for d in a.reports or []],
             "tz": _tz(a.tz) if a.tz else datetime.now().astimezone().tzinfo, "prices": prices,
             "orchestrator_limit": a.orchestrator_limit, "output_limit": a.output_limit, "ask_model": a.ask_model,
-            "ask_codex_model": a.ask_codex_model, "reviews": os.path.expanduser(a.reviews) if a.reviews else None}
+            "ask_codex_model": a.ask_codex_model, "reviews": os.path.expanduser(a.reviews) if a.reviews else None,
+            "keep_days": a.keep_days}
 
 
 def cmd_review(a: argparse.Namespace) -> int:
@@ -150,6 +151,10 @@ def cmd_review(a: argparse.Namespace) -> int:
     cfg = _cfg(a)
     tz = cfg["tz"]
     report, compare = None, 0
+    if a.prune is not None:
+        gone = review.prune(a.prune, cfg["reviews"])
+        print(f"deleted {len(gone)} review(s) older than {a.prune:g} days", file=sys.stderr)
+        return 0
     if a.run == "latest":  # for automatic runs: the newest report, once
         found = review.latest_reports(cfg["reports"], 1)
         if not found:
@@ -240,6 +245,8 @@ def main(argv=None) -> int:
     w.add_argument("--ask-model", default="sonnet", help="model for the Ask Claude button ('' for your default)")
     w.add_argument("--ask-codex-model", default="", help="model for the Ask ChatGPT button (default: your Codex default)")
     w.add_argument("--reviews", help="folder for saved reviews (default: $SUPERFAN_REVIEWS or ~/.superfan/reviews)")
+    w.add_argument("--keep-days", type=float, default=0,
+                   help="after each new review, delete reviews older than this many days (default 0: keep all)")
     w.add_argument("--no-open", action="store_true", help="do not open the browser")
     w.set_defaults(fn=cmd_serve)
     v = sub.add_parser("review", help="review a run, a day or a window; a model writes the summary, the numbers are computed")
@@ -262,6 +269,9 @@ def main(argv=None) -> int:
     v.add_argument("--ask-model", default="sonnet")
     v.add_argument("--ask-codex-model", default="")
     v.add_argument("--reviews", help="folder to save to (default: $SUPERFAN_REVIEWS or ~/.superfan/reviews)")
+    g.add_argument("--prune", type=float, metavar="DAYS", help="only delete saved reviews older than DAYS, then stop")
+    v.add_argument("--keep-days", type=float, default=0,
+                   help="after saving, delete reviews older than this many days (default 0: keep all)")
     v.add_argument("--quiet", action="store_true", help="only print where it was saved")
     v.set_defaults(fn=cmd_review)
     a = p.parse_args(argv)

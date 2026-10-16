@@ -225,6 +225,8 @@ def run(cfg: dict, scope: str, since: datetime, until: datetime, report: str | N
         fh.write(text)
     with open(path[:-3] + ".json", "w", encoding="utf-8") as fh:
         json.dump(data, fh, indent=1, default=str)
+    if cfg.get("keep_days"):
+        prune(cfg["keep_days"], out_dir)
     return {"name": name, "path": path, "markdown": text, "data": data, "errors": errors}
 
 
@@ -254,6 +256,37 @@ def load(name: str, out_dir: str | None = None) -> str | None:
         return None
     with open(path, encoding="utf-8") as fh:
         return fh.read()
+
+
+def _made_at(name: str, out_dir: str) -> datetime:
+    try:
+        with open(os.path.join(out_dir, name[:-3] + ".json"), encoding="utf-8") as fh:
+            return datetime.fromisoformat(json.load(fh)["made_at"])
+    except (OSError, ValueError, KeyError):
+        return datetime.fromtimestamp(os.path.getmtime(os.path.join(out_dir, name)), timezone.utc)
+
+
+def delete(name: str, out_dir: str | None = None) -> bool:
+    """Remove one review (.md and .json). Only names this module wrote, only in the reviews folder."""
+    if not NAME_RE.match(name or ""):
+        return False
+    out_dir = out_dir or default_dir()
+    gone = False
+    for path in (os.path.join(out_dir, name), os.path.join(out_dir, name[:-3] + ".json")):
+        if os.path.isfile(path):
+            os.remove(path)
+            gone = True
+    return gone
+
+
+def prune(days: float, out_dir: str | None = None) -> list:
+    """Delete reviews made more than `days` ago. Returns the names deleted."""
+    out_dir = out_dir or default_dir()
+    if days <= 0 or not os.path.isdir(out_dir):
+        return []
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    old = [n for n in os.listdir(out_dir) if NAME_RE.match(n) and _made_at(n, out_dir) < cutoff]
+    return [n for n in old if delete(n, out_dir)]
 
 
 def latest_reports(report_dirs: list, limit: int = 20) -> list:

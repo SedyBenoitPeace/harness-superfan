@@ -195,7 +195,12 @@ input { font: inherit; color: var(--ink); background: var(--surface); border: 1p
       <p class="err" id="rv-err" hidden></p>
     </section>
     <section class="card">
-      <h2>Saved reviews</h2>
+      <div class="row">
+        <div><h2>Saved reviews</h2><div class="sub" id="rv-keep"></div></div>
+        <div class="controls"><label class="sub" for="rv-old">Delete reviews older than</label>
+          <input type="number" id="rv-old" min="1" value="30" style="width:70px"><span class="sub">days</span>
+          <button id="rv-prune">Delete</button></div>
+      </div>
       <div class="rv"><div class="rvlist" id="rv-list"><div class="empty">No reviews yet.</div></div><div id="rv-view"></div></div>
     </section>
   </div>
@@ -522,12 +527,13 @@ const SCOPE = { day: "Day", run: "Run", window: "Window" };
 async function loadReviews(openName) {
   const j = await (await fetch("/api/reviews")).json();
   rv.list = j.reviews; rv.reports = j.reports; $("#rv-dir").textContent = j.dir;
+  $("#rv-keep").textContent = j.keep_days ? `Reviews older than ${j.keep_days} days are deleted after each new one.` : "Kept until you delete them (or start serve with --keep-days).";
   if (!$("#rv-day").value) $("#rv-day").value = j.today;
   $("#rv-run").innerHTML = j.reports.length ? j.reports.map((r) => `<option value="${esc(r.id)}">${esc(r.project)} · ${esc(r.name)}</option>`).join("")
     : `<option value="">No run reports (start serve with --reports)</option>`;
   reviewList();
-  const name = openName || rv.open || (rv.list[0] || {}).name;
-  if (name) openReview(name);
+  const name = [openName, rv.open].find((n) => n && rv.list.some((r) => r.name === n)) || (rv.list[0] || {}).name;
+  if (name) openReview(name); else { rv.open = null; $("#rv-view").innerHTML = ""; }
 }
 function reviewList() {
   $("#rv-list").innerHTML = rv.list && rv.list.length ? rv.list.map((r) => {
@@ -542,8 +548,14 @@ async function openReview(name) {
   const r = await fetch("/api/review?name=" + encodeURIComponent(name));
   const j = await r.json();
   rv.text = j.markdown || "";
-  $("#rv-view").innerHTML = r.ok ? `<div class="answer" style="margin-top:0"><div class="row"><span class="muted mono" style="font-size:12px">${esc(name)}</span><button id="review-dl">Download .md</button></div>${md(rv.text)}</div>`
+  $("#rv-view").innerHTML = r.ok ? `<div class="answer" style="margin-top:0"><div class="row"><span class="muted mono" style="font-size:12px">${esc(name)}</span><span class="controls"><button id="review-dl">Download .md</button><button id="review-del">Delete</button></span></div>${md(rv.text)}</div>`
     : `<p class="err">${esc(j.error)}</p>`;
+}
+async function deleteReviews(body, what) {
+  if (!confirm(`Delete ${what}? This removes the files from your reviews folder.`)) return;
+  try { const j = await post("/api/reviews/delete", body); if (!j.deleted.length) alert("Nothing to delete."); }
+  catch (e) { alert("Delete failed: " + e.message); }
+  await loadReviews();
 }
 function scopeInputs() {
   const s = $("#rv-scope").value;
@@ -620,6 +632,8 @@ document.addEventListener("click", (e) => {
   if (t.closest("textarea, select, input, #harness, #tiles, #run")) return;
   const tb = t.closest("nav.tabs button"); if (tb) { setTab(tb.dataset.tab); return; }
   if (t.id === "rv-go") { runReview(); return; }
+  if (t.id === "review-del") { deleteReviews({ name: rv.open }, "this review"); return; }
+  if (t.id === "rv-prune") { const n = +$("#rv-old").value; if (n >= 1) deleteReviews({ older_than_days: n }, `every review older than ${n} days`); return; }
   const rb = t.closest("[data-review]"); if (rb) { openReview(rb.dataset.review); return; }
   if (t.id === "review-dl") {
     const a = document.createElement("a");
