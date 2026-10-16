@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.DS_Store
+# Real logs and derived outputs never belong here; only tests/fixtures holds (synthetic) logs.
+/data/
+/*.jsonl
+/*.json
+!/superfan/prices.json
+*-review-*.md

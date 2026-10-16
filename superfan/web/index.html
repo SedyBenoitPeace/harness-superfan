@@ -1,0 +1,570 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Harness Superfan</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --ring: rgba(11,11,11,0.10); --hover: #f0efea;
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a;          /* roles: orchestrator, approval reviewer, subagents */
+  --h-cc: #6250d6; --h-cx: #eda100;                      /* harnesses: Claude Code, Codex */
+  --good: #0ca30c; --warning: #fab219; --serious: #ec835a; --critical: #d03b3b;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10); --hover: #222221;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --h-cc: #9085e9; --h-cx: #c98500;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10); --hover: #222221;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --h-cc: #9085e9; --h-cx: #c98500;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--ink);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 1180px; margin: 0 auto; padding: 24px 16px 64px; }
+header { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+h1 { font-size: 20px; margin: 0; }
+h2 { font-size: 15px; margin: 0 0 4px; }
+h3 { font-size: 13px; margin: 14px 0 6px; color: var(--ink-2); font-weight: 600; }
+h3:first-child { margin-top: 0; }
+.sub { color: var(--ink-2); font-size: 13px; }
+.muted { color: var(--muted); }
+.controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+select, button, textarea { font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--axis); border-radius: 8px; padding: 6px 10px; }
+button { cursor: pointer; }
+button.primary { background: var(--ink); color: var(--page); border-color: var(--ink); font-weight: 600; }
+button:disabled { opacity: .5; cursor: progress; }
+.seg { display: inline-flex; border: 1px solid var(--axis); border-radius: 8px; overflow: hidden; }
+.seg button { border: 0; border-radius: 0; background: transparent; }
+.seg button[aria-pressed="true"] { background: var(--grid); font-weight: 600; }
+.card { background: var(--surface); border: 1px solid var(--ring); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-bottom: 12px; }
+.tile { text-align: left; background: var(--surface); border: 1px solid var(--ring); border-radius: 12px; padding: 14px 16px; position: relative; }
+.tile:hover { background: var(--hover); }
+.tile[aria-expanded="true"] { border-color: var(--ink-2); }
+.tile .label { color: var(--ink-2); font-size: 12px; }
+.tile .value { font-size: 26px; font-weight: 600; margin-top: 2px; }
+.tile .note { color: var(--muted); font-size: 12px; }
+.tile .chev { position: absolute; top: 12px; right: 14px; color: var(--muted); font-size: 11px; }
+.empty { color: var(--ink-2); padding: 24px 0; text-align: center; }
+.row { display: flex; gap: 8px; align-items: center; justify-content: space-between; flex-wrap: wrap; margin-bottom: 8px; }
+table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--grid); vertical-align: middle; }
+th { color: var(--ink-2); font-weight: 500; font-size: 12px; }
+td.num, th.num { text-align: right; white-space: nowrap; }
+tr.click { cursor: pointer; }
+tr.click:hover > td { background: var(--hover); }
+tr.detail > td { background: var(--page); padding: 12px; }
+tr.child > td:first-child { padding-left: 22px; }
+.caret { display: inline-block; width: 14px; color: var(--muted); }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.ellip { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tag { display: inline-flex; gap: 5px; align-items: center; font-size: 11px; padding: 1px 6px; border-radius: 6px; border: 1px solid var(--axis); color: var(--ink-2); white-space: nowrap; }
+.tag i, .legend i, .dot { display: inline-block; width: 8px; height: 8px; border-radius: 2px; }
+.hstats { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--ink-2); }
+.split { display: flex; gap: 2px; height: 10px; width: 160px; min-width: 120px; }
+.split span { display: block; height: 100%; }
+.split span:first-child { border-radius: 4px 0 0 4px; }
+.split span:last-child { border-radius: 0 4px 4px 0; }
+.split span:only-child { border-radius: 4px; }
+.legend { display: flex; gap: 14px; flex-wrap: wrap; color: var(--ink-2); font-size: 12px; }
+.legend i { width: 10px; height: 10px; margin-right: 5px; vertical-align: -1px; }
+.rule { border-top: 1px solid var(--grid); padding: 12px 0; }
+.rule:first-of-type { border-top: 0; padding-top: 0; }
+.rule h4 { font-size: 14px; margin: 0 0 4px; display: flex; gap: 8px; align-items: center; }
+.badge { font-size: 12px; font-weight: 600; padding: 1px 8px; border-radius: 999px; border: 1px solid; }
+.badge.ok { color: var(--good); border-color: var(--good); }
+.badge.warn { color: var(--ink); border-color: var(--serious); }
+.rule ul { margin: 6px 0 0; padding-left: 18px; color: var(--ink-2); }
+.rule li { margin: 3px 0; }
+.bars { display: grid; grid-template-columns: minmax(150px, 230px) 1fr 70px 70px 64px; gap: 0 10px; align-items: center; }
+.bars > .h { color: var(--ink-2); font-size: 12px; padding: 0 0 6px; }
+.bars > .r { display: contents; cursor: pointer; }
+.bars > .r > div { padding: 6px 0; border-top: 1px solid var(--grid); height: 100%; display: flex; align-items: center; }
+.bars > .r > div.num { justify-content: flex-end; }
+.bars > .r > div:first-child { display: block; min-width: 0; overflow-wrap: anywhere; }
+.bars > .r > div > .bar { flex: none; }
+.bars > .r:hover > div { background: var(--hover); }
+.bars > .x { grid-column: 1 / -1; background: var(--page); border-radius: 8px; padding: 12px; margin: 4px 0 8px; }
+.bar { height: 14px; background: var(--s1); border-radius: 0 4px 4px 0; min-width: 2px; }
+.bar.cc { background: var(--h-cc); } .bar.cx { background: var(--h-cx); }
+.minibars { display: grid; grid-template-columns: minmax(120px, 240px) 1fr 80px; gap: 5px 10px; align-items: center; font-size: 13px; }
+.minibars .bar { height: 10px; }
+.stack { display: flex; gap: 2px; height: 14px; }
+.stack span { height: 100%; }
+.stack span:first-child { border-radius: 3px 0 0 3px; } .stack span:last-child { border-radius: 0 3px 3px 0; } .stack span:only-child { border-radius: 3px; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px 24px; }
+.grid2 > div { min-width: 0; }
+.tips { display: grid; gap: 10px; }
+.tip { border: 1px solid var(--ring); border-left: 3px solid var(--serious); border-radius: 8px; padding: 10px 12px; background: var(--surface); }
+.tip b { display: block; margin-bottom: 3px; }
+.tip p { margin: 3px 0; font-size: 13px; color: var(--ink-2); }
+.tip p span { color: var(--ink); font-weight: 600; }
+.ask { display: flex; gap: 8px; flex-wrap: wrap; }
+.ask textarea { flex: 1 1 260px; min-height: 38px; resize: vertical; }
+.answer { margin-top: 10px; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--ring); background: var(--surface); font-size: 13px; }
+.answer p { margin: 4px 0; }
+.answer ul { padding-left: 18px; margin: 4px 0; }
+.answer code { font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+.err { color: var(--critical); }
+#tip { position: fixed; pointer-events: none; background: var(--surface); color: var(--ink); border: 1px solid var(--ring);
+  border-radius: 8px; padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 16px rgba(0,0,0,.12); display: none; z-index: 10; max-width: 360px; }
+.scroll { overflow-x: auto; }
+.more { margin-top: 8px; }
+a { color: inherit; }
+@media (max-width: 640px) {
+  .hide-sm { display: none; }
+  .bars { grid-template-columns: 130px 1fr 56px; } .bars .t, .bars .u { display: none; }
+  .minibars { grid-template-columns: 110px 1fr 64px; }
+  .split { width: 80px; min-width: 64px; }
+  .grid2 { grid-template-columns: 1fr; }
+  .ellip { max-width: 200px; }
+}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <h1>Harness Superfan</h1>
+      <div class="sub" id="meta">Not run yet.</div>
+    </div>
+    <div class="controls">
+      <div class="seg" id="harness" role="group" aria-label="Harness">
+        <button data-h="all" aria-pressed="true">All</button>
+        <button data-h="claude-code" aria-pressed="false">Claude Code</button>
+        <button data-h="codex" aria-pressed="false">Codex</button>
+      </div>
+      <select id="days" aria-label="Window">
+        <option value="1">Last 24 hours</option>
+        <option value="7" selected>Last 7 days</option>
+        <option value="30">Last 30 days</option>
+        <option value="90">Last 90 days</option>
+      </select>
+      <button class="primary" id="run">Run now</button>
+    </div>
+  </header>
+
+  <div id="error" class="card err" hidden></div>
+  <section class="card" id="review">
+    <div class="row">
+      <div>
+        <h2>Weekly review</h2>
+        <div class="sub">The review the Monday routine runs: reads the last 7 days, runs the health rules, and has a model write the report (top sessions, what fired, what to change first, kit issues worth filing). Nothing is filed or saved.</div>
+      </div>
+      <div class="controls" id="review-btns"></div>
+    </div>
+    <div id="review-body"></div>
+  </section>
+  <section class="tiles" id="tiles"></section>
+  <section class="card" id="tile-detail" hidden></section>
+
+  <section class="card">
+    <div class="row">
+      <div>
+        <h2 id="sess-title">Sessions</h2>
+        <div class="sub" id="sess-sub"></div>
+      </div>
+      <div class="legend">
+        <span><i style="background:var(--s1)"></i>Orchestrator</span>
+        <span><i style="background:var(--s2)"></i>Approval reviewer</span>
+        <span><i style="background:var(--s3)"></i>Subagents</span>
+      </div>
+    </div>
+    <div class="scroll" id="sessions"><div class="empty">Press Run now to read your logs.</div></div>
+  </section>
+
+  <section class="card" id="ask-all" hidden>
+    <h2>Ask about all sessions</h2>
+    <p class="sub" style="margin:0 0 10px">Looks across every session in this window and harness filter: totals, the 40 largest sessions in detail, where tokens went and the rule findings.</p>
+    <div id="ask-all-body"></div>
+  </section>
+
+  <div id="breakdowns"></div>
+
+  <section class="card" id="rules-card">
+    <h2>Health rules</h2>
+    <div id="rules" class="sub">Nothing yet.</div>
+  </section>
+  <p class="sub">Reads logs on this computer only. Claude Code dollars use API list prices; Codex is shown in tokens. “Ask Claude” and “Ask ChatGPT” send one session's numbers and command names (no transcript) to your local <span class="mono">claude</span> or <span class="mono">codex</span> command.</p>
+</main>
+<div id="tip"></div>
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const tok = (n) => n >= 1e9 ? (n / 1e9).toFixed(2) + "B" : n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? Math.round(n / 1e3) + "k" : String(Math.round(n || 0));
+const usd = (n) => n == null ? "—" : n < 0.01 && n > 0 ? "<$0.01" : "$" + n.toFixed(2);
+const pct = (x) => isFinite(x) ? Math.round(x * 100) + "%" : "—";
+const dur = (s) => { const m = Math.round((s || 0) / 60); return m >= 60 ? Math.floor(m / 60) + "h" + String(m % 60).padStart(2, "0") : m + "m"; };
+const sum = (xs, f) => xs.reduce((a, x) => a + (f(x) || 0), 0);
+const HNAME = { "claude-code": "Claude Code", codex: "Codex" };
+const HCOL = { "claude-code": "--h-cc", codex: "--h-cx" };
+const HCLS = { "claude-code": "cc", codex: "cx" };
+const ROLE = { orchestrator: "Orchestrator", reviewer: "Approval reviewer", worker: "Subagent" };
+const RCOL = { orchestrator: "--s1", reviewer: "--s2", worker: "--s3" };
+const htag = (h) => `<span class="tag"><i style="background:var(${HCOL[h] || "--muted"})"></i>${HNAME[h] || esc(h)}</span>`;
+const orchTok = (s) => sum(s.agents.filter((a) => a.role !== "worker"), (a) => a.tokens.total);
+let data = null, harness = "all", tile = null, showAll = false;
+const open = new Set(), detail = new Map(), loading = new Set(), answers = new Map();
+
+const visible = () => data.sessions.filter((s) => harness === "all" || s.harness === harness);
+const harnessOf = (sid) => (data.sessions.find((s) => s.session_id === sid) || {}).harness;
+const findingsVisible = () => data.findings.filter((f) => {
+  const h = f.harness || harnessOf(f.session); return harness === "all" || !h || h === harness;
+});
+
+function roleSplit(agents) {
+  const by = { orchestrator: 0, reviewer: 0, worker: 0 };
+  agents.forEach((a) => by[a.role] = (by[a.role] || 0) + a.tokens.total);
+  const t = by.orchestrator + by.reviewer + by.worker || 1;
+  return `<div class="split">` + ["orchestrator", "reviewer", "worker"].filter((k) => by[k] > 0).map((k) =>
+    `<span style="width:${(by[k] / t * 100).toFixed(2)}%;background:var(${RCOL[k]})" data-tip="${ROLE[k]}${k === "worker" ? "s" : ""}: ${tok(by[k])} (${pct(by[k] / t)})"></span>`).join("") + `</div>`;
+}
+function bars(rows, cls = "") { // rows: [label html, value, right text, tooltip]
+  const max = Math.max(...rows.map((r) => r[1]), 1e-9);
+  return `<div class="minibars">` + rows.map(([l, v, r, t]) => `<div class="ellip">${l}</div>
+    <div><div class="bar ${cls}" style="width:${Math.max(v / max * 100, 0).toFixed(1)}%" data-tip="${esc(t || "")}"></div></div><div class="num">${r}</div>`).join("") + `</div>`;
+}
+
+/* ---------- tiles ---------- */
+function tiles() {
+  const ss = visible(), tot = sum(ss, (s) => s.tokens.total), orch = sum(ss, orchTok);
+  const cc = ss.filter((s) => s.harness === "claude-code"), cost = sum(cc, (s) => s.cost_usd);
+  const fs = findingsVisible(), fired = new Set(fs.map((f) => f.rule)).size;
+  const counts = Object.entries(ss.reduce((m, s) => (m[s.harness] = (m[s.harness] || 0) + 1, m), {})).map(([h, n]) => `${HNAME[h] || h} ${n}`).join(" · ");
+  const spendNote = harness === "codex" ? "Codex is tokens only" : data.sources.claude ? `${cc.length} sessions, API list prices` : "Claude Code logs not found";
+  const t = [
+    ["sessions", "Sessions", ss.length, counts || "none"],
+    ["tokens", "Tokens", tok(tot), tot ? pct(sum(ss, (s) => s.tokens.cache_read) / tot) + " cache reads" : ""],
+    ["spend", "Claude Code spend", harness === "codex" || !data.sources.claude ? "—" : usd(cost), spendNote],
+    ["orch", "Orchestration share", tot ? pct(orch / tot) : "—", "orchestrator + approval reviewers"],
+    ["rules", "Health rules fired", `${fired} of 3`, `${fs.length} findings`],
+  ];
+  $("#tiles").innerHTML = t.map(([k, l, v, n]) => `<button class="tile" data-k="${k}" aria-expanded="${tile === k}"><span class="chev">${tile === k ? "Hide ▲" : "Details ▼"}</span>
+    <div class="label">${l}</div><div class="value">${esc(v)}</div><div class="note">${esc(n)}</div></button>`).join("");
+  const box = $("#tile-detail");
+  box.hidden = !tile;
+  if (tile) box.innerHTML = `<h2>${t.find((x) => x[0] === tile)[1]}</h2><div style="margin-top:10px">${TILE[tile](ss)}</div>`;
+}
+
+function harnessTable(ss, cols) {
+  const hs = [...new Set(ss.map((s) => s.harness))].sort();
+  return `<div class="scroll"><table><thead><tr><th>Harness</th>${cols.map((c) => `<th class="num">${c[0]}</th>`).join("")}</tr></thead><tbody>` +
+    hs.map((h) => { const x = ss.filter((s) => s.harness === h); return `<tr><td>${htag(h)}</td>${cols.map((c) => `<td class="num">${c[1](x, h)}</td>`).join("")}</tr>`; }).join("") +
+    (hs.length > 1 ? `<tr><td><b>Total</b></td>${cols.map((c) => `<td class="num"><b>${c[1](ss, null)}</b></td>`).join("")}</tr>` : "") + `</tbody></table></div>`;
+}
+const TILE = {
+  sessions(ss) {
+    const days = {}, hs = [...new Set(ss.map((s) => s.harness))].sort();
+    ss.forEach((s) => { const d = (s.start || "").slice(0, 10); days[d] = days[d] || {}; days[d][s.harness] = (days[d][s.harness] || 0) + 1; });
+    const keys = Object.keys(days).sort(), max = Math.max(...keys.map((d) => sum(hs, (h) => days[d][h])), 1);
+    return `<h3>By harness</h3>` + harnessTable(ss, [
+      ["Sessions", (x) => x.length], ["Tokens", (x) => tok(sum(x, (s) => s.tokens.total))], ["Avg per session", (x) => tok(sum(x, (s) => s.tokens.total) / (x.length || 1))],
+      ["Active time", (x) => dur(sum(x, (s) => s.active_s))], ["Model calls", (x) => sum(x, (s) => s.model_calls).toLocaleString()],
+      ["Tool calls", (x) => sum(x, (s) => s.tool_calls).toLocaleString()], ["Subagents", (x) => sum(x, (s) => s.subagents)]]) +
+      `<h3>Sessions started per day</h3><div class="legend" style="margin-bottom:6px">${hs.map((h) => `<span><i style="background:var(${HCOL[h]})"></i>${HNAME[h] || h}</span>`).join("")}</div>
+      <div class="minibars">` + keys.map((d) => `<div>${new Date(d + "T12:00:00").toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}</div>
+        <div><div class="stack" style="width:${(sum(hs, (h) => days[d][h]) / max * 100).toFixed(1)}%">${hs.filter((h) => days[d][h]).map((h) =>
+          `<span style="flex:${days[d][h]};background:var(${HCOL[h]})" data-tip="${HNAME[h] || h}: ${days[d][h]}"></span>`).join("")}</div></div>
+        <div class="num">${sum(hs, (h) => days[d][h])}</div>`).join("") + `</div>`;
+  },
+  tokens(ss) {
+    const kinds = [["input", "Fresh input"], ["cache_read", "Cache read"], ["cache_write", "Cache write"], ["output", "Output"]];
+    const models = {};
+    ss.forEach((s) => Object.entries(s.by_model || {}).forEach(([m, v]) => { const x = models[m] = models[m] || { tokens: 0, calls: 0, cost: null, h: s.harness };
+      x.tokens += v.tokens; x.calls += v.calls; if (v.cost_usd != null) x.cost = (x.cost || 0) + v.cost_usd; }));
+    const ms = Object.entries(models).sort((a, b) => b[1].tokens - a[1].tokens);
+    return `<h3>Token mix</h3>` + harnessTable(ss, kinds.map(([k, n]) => [n, (x) => { const t = sum(x, (s) => s.tokens.total), v = sum(x, (s) => s.tokens[k]); return `${tok(v)} <span class="muted">${pct(v / t)}</span>`; }]).concat([["Total", (x) => tok(sum(x, (s) => s.tokens.total))]])) +
+      `<p class="sub">Cache reads are prompt tokens served from cache: cheaper per token, but they grow with every call in a long thread. Codex counts reasoning in output.</p>
+      <h3>By model</h3>` + bars(ms.map(([m, v]) => [`${htag(v.h)} <span class="mono">${esc(m)}</span>`, v.tokens, tok(v.tokens), `${m}: ${v.calls.toLocaleString()} calls${v.cost != null ? ", " + usd(v.cost) : ""}`]));
+  },
+  spend(ss) {
+    const cc = ss.filter((s) => s.harness === "claude-code");
+    if (!cc.length) return `<div class="sub">${harness === "codex" ? "Codex sessions are shown in tokens only, without prices." : "No Claude Code sessions in this window."}</div>`;
+    const parts = { input: 0, cache_read: 0, cache_write: 0, output: 0 }, models = {}, projects = {};
+    cc.forEach((s) => { Object.keys(parts).forEach((k) => parts[k] += (s.cost_parts || {})[k] || 0);
+      Object.entries(s.by_model || {}).forEach(([m, v]) => models[m] = (models[m] || 0) + (v.cost_usd || 0));
+      projects[s.project] = (projects[s.project] || 0) + (s.cost_usd || 0); });
+    const total = sum(cc, (s) => s.cost_usd) || 1e-9, name = { input: "Fresh input", cache_read: "Cache read", cache_write: "Cache write", output: "Output" };
+    const top = [...cc].sort((a, b) => b.cost_usd - a.cost_usd).slice(0, 6);
+    const ent = (o) => Object.entries(o).sort((a, b) => b[1] - a[1]);
+    return `<div class="grid2"><div><h3>By kind of token</h3>` + bars(ent(parts).map(([k, v]) => [name[k], v, usd(v), `${name[k]}: ${pct(v / total)} of spend`]), "cc") +
+      `<h3>By model</h3>` + bars(ent(models).map(([m, v]) => [`<span class="mono">${esc(m)}</span>`, v, usd(v), `${pct(v / total)} of spend`]), "cc") +
+      `<h3>By project</h3>` + bars(ent(projects).map(([p, v]) => [esc(p), v, usd(v), `${pct(v / total)} of spend`]), "cc") +
+      `</div><div><h3>Most expensive sessions</h3><table><thead><tr><th>Project</th><th>Session</th><th class="num">Tokens</th><th class="num">$</th></tr></thead><tbody>` +
+      top.map((s) => `<tr class="click" data-goto="${esc(s.session_id)}"><td>${esc(s.project)}</td><td class="mono">${esc(s.session_id.slice(0, 8))}</td><td class="num">${tok(s.tokens.total)}</td><td class="num">${usd(s.cost_usd)}</td></tr>`).join("") +
+      `</tbody></table><p class="sub">API list prices from prices.json. On a subscription this is the API-equivalent value, not your bill.</p></div></div>`;
+  },
+  orch(ss) {
+    const roleTok = (x, r) => sum(x, (s) => sum(s.agents.filter((a) => a.role === r), (a) => a.tokens.total));
+    const cell = (r) => (x) => `${tok(roleTok(x, r))} <span class="muted">${pct(roleTok(x, r) / sum(x, (s) => s.tokens.total))}</span>`;
+    const withSub = ss.filter((s) => s.subagents).sort((a, b) => orchTok(b) - orchTok(a)).slice(0, 10);
+    return `<h3>Tokens by role</h3>` + harnessTable(ss, [["Orchestrator", cell("orchestrator")], ["Approval reviewers", cell("reviewer")], ["Subagents", cell("worker")],
+      ["Sessions with subagents", (x) => x.filter((s) => s.subagents).length]]) +
+      `<h3>Sessions with subagents, by orchestrator tokens</h3><div class="scroll"><table><thead><tr><th>Project</th><th>Harness</th><th class="num">Orchestration</th><th class="num">Orchestrator tokens</th><th class="num hide-sm">Largest prompt</th><th>Split</th></tr></thead><tbody>` +
+      withSub.map((s) => { const m = s.agents.find((a) => a.role === "orchestrator") || {}; return `<tr class="click" data-goto="${esc(s.session_id)}"><td>${esc(s.project)}</td><td>${htag(s.harness)}</td>
+        <td class="num">${pct(s.orchestration_share)}${s.orchestration_share > data.thresholds.orchestrator ? " ▲" : ""}</td><td class="num">${tok(orchTok(s))}</td>
+        <td class="num hide-sm">${tok(m.max_context || 0)}</td><td>${roleSplit(s.agents)}</td></tr>`; }).join("") +
+      `</tbody></table></div><p class="sub">▲ above the ${pct(data.thresholds.orchestrator)} limit of rule R1. The orchestrator re-sends its whole context on each call, so work it does itself costs more than the same work in a subagent.</p>`;
+  },
+  rules() {
+    const fs = findingsVisible();
+    if (!fs.length) return `<div class="sub">No findings in this window.</div>`;
+    return `<div class="scroll"><table><thead><tr><th>Rule</th><th>Where</th><th>Agent</th><th class="num">Tokens</th><th>Evidence</th></tr></thead><tbody>` +
+      [...fs].sort((a, b) => a.rule.localeCompare(b.rule) || (b.carried || b.tokens || 0) - (a.carried || a.tokens || 0)).map((f) => `<tr ${f.session ? `class="click" data-goto="${esc(f.session)}"` : ""}>
+        <td style="white-space:nowrap">${esc(f.rule.split(" ")[0])}</td><td class="mono">${esc(f.session ? (f.project || "") + " " + f.session.slice(0, 8) : f.report || "")}</td>
+        <td>${esc(f.agent || "")}</td><td class="num">${f.carried ? tok(f.carried) + " carried" : f.tokens ? tok(f.tokens) : ""}</td><td>${esc(f.evidence)}</td></tr>`).join("") + `</tbody></table></div>`;
+  },
+};
+
+/* ---------- sessions & projects ---------- */
+const SESS_HEAD = (first, third) => `<thead><tr><th>${first}</th><th>Harness</th><th>${third}</th><th class="hide-sm">${third === "Project" ? "Session" : "Models"}</th><th class="num">Tokens</th>
+  <th class="num">$</th><th class="num hide-sm">Active</th><th class="num hide-sm">Calls</th><th>Token split</th></tr></thead>`;
+function sessRow(s, i, child) {
+  const id = s.session_id, isOpen = open.has("s:" + id);
+  let h = `<tr class="click ${child ? "child" : ""}" data-key="s:${esc(id)}" id="row-${esc(id)}"><td><span class="caret">${isOpen ? "▾" : "▸"}</span>${child ? "" : i + 1}</td>
+    <td>${htag(s.harness)}</td><td>${child ? `<span class="mono">${esc(id.slice(0, 8))}</span> <span class="muted">${esc((s.start || "").slice(5, 16).replace("T", " "))}</span>` : esc(s.project)}</td>
+    <td class="mono hide-sm">${child ? esc(s.models.join(", ")) : esc(id.slice(0, 8))}</td><td class="num">${tok(s.tokens.total)}</td>
+    <td class="num">${usd(s.cost_usd)}</td><td class="num hide-sm">${dur(s.active_s)}</td><td class="num hide-sm">${s.model_calls}</td><td>${roleSplit(s.agents)}</td></tr>`;
+  if (isOpen) h += `<tr class="detail"><td colspan="9">${sessionDetail(s)}</td></tr>`;
+  return h;
+}
+
+function sessions() {
+  const ss = visible();
+  if (!ss.length) { $("#sessions").innerHTML = `<div class="empty">No sessions in this window.</div>`; return; }
+  if (harness !== "all") {
+    $("#sess-title").textContent = `${HNAME[harness]} sessions`;
+    $("#sess-sub").textContent = "Most tokens first. Click a session for its agents, where its tokens went and what to improve.";
+    const rows = showAll ? ss : ss.slice(0, 15);
+    $("#sessions").innerHTML = `<table>${SESS_HEAD("#", "Project")}<tbody>${rows.map((s, i) => sessRow(s, i)).join("")}</tbody></table>` +
+      (ss.length > 15 ? `<button class="more" id="more">${showAll ? "Show top 15" : `Show all ${ss.length}`}</button>` : "");
+    return;
+  }
+  $("#sess-title").textContent = "Projects";
+  $("#sess-sub").textContent = "All harnesses, grouped by project. Click a project for its sessions, then a session for the detail.";
+  const by = {};
+  ss.forEach((s) => (by[s.project] = by[s.project] || []).push(s));
+  const projects = Object.entries(by).sort((a, b) => sum(b[1], (s) => s.tokens.total) - sum(a[1], (s) => s.tokens.total));
+  $("#sessions").innerHTML = `<table><thead><tr><th>Project</th><th>By harness: sessions · tokens · $ · orchestration</th><th class="num">Sessions</th><th class="num">Tokens</th><th class="num">$</th><th class="num hide-sm">Active</th><th class="num hide-sm">Orchestration</th><th>Token split</th></tr></thead><tbody>` +
+    projects.map(([p, xs]) => {
+      const tot = sum(xs, (s) => s.tokens.total), key = "p:" + p, isOpen = open.has(key), cc = xs.filter((s) => s.harness === "claude-code");
+      const hs = [...new Set(xs.map((s) => s.harness))].sort().map((h) => { const y = xs.filter((s) => s.harness === h);
+        return `<div>${htag(h)} ${y.length} · ${tok(sum(y, (s) => s.tokens.total))}${h === "claude-code" ? " · " + usd(sum(y, (s) => s.cost_usd)) : ""} · ${pct(sum(y, orchTok) / sum(y, (s) => s.tokens.total))}</div>`; }).join("");
+      let h = `<tr class="click" data-key="${esc(key)}"><td><span class="caret">${isOpen ? "▾" : "▸"}</span><b>${esc(p)}</b></td><td><div class="hstats">${hs}</div></td>
+        <td class="num">${xs.length}</td><td class="num">${tok(tot)}</td><td class="num">${cc.length ? usd(sum(cc, (s) => s.cost_usd)) : "—"}</td>
+        <td class="num hide-sm">${dur(sum(xs, (s) => s.active_s))}</td><td class="num hide-sm">${pct(sum(xs, orchTok) / tot)}</td><td>${roleSplit(xs.flatMap((s) => s.agents))}</td></tr>`;
+      if (isOpen) h += `<tr class="detail"><td colspan="8" style="padding:0 0 8px"><table>${SESS_HEAD("", "Session")}<tbody>${xs.map((s, i) => sessRow(s, i, true)).join("")}</tbody></table></td></tr>`;
+      return h;
+    }).join("") + `</tbody></table>`;
+}
+
+function sessionDetail(s) {
+  const agents = `<div class="scroll"><table><thead><tr><th>Agent</th><th>Type</th><th>Model</th><th class="num">Tokens</th><th class="num">Share</th><th class="num">$</th>
+    <th class="num">Calls</th><th class="num">Largest prompt</th><th class="num">Tool calls</th><th class="num hide-sm">Active</th></tr></thead><tbody>` +
+    s.agents.map((a) => `<tr><td style="white-space:nowrap"><span class="dot" style="background:var(${RCOL[a.role]})"></span> ${ROLE[a.role]}</td><td>${esc(a.label || "—")}</td>
+      <td class="mono">${esc(a.models.join(", "))}</td><td class="num">${tok(a.tokens.total)}</td><td class="num">${pct(a.share)}</td><td class="num">${usd(a.cost_usd)}</td>
+      <td class="num">${a.model_calls}</td><td class="num">${tok(a.max_context)}</td><td class="num">${a.tool_calls}</td><td class="num hide-sm">${dur(a.active_s)}</td></tr>`).join("") +
+    `</tbody></table></div><div class="sub" style="margin-top:6px">Fresh input ${tok(s.tokens.input)} · cache read ${tok(s.tokens.cache_read)} · cache write ${tok(s.tokens.cache_write)} · output ${tok(s.tokens.output)} ·
+    active ${dur(s.active_s)} of ${dur(s.duration_s)} wall · top tools: ${esc(Object.entries(s.tools).slice(0, 6).map(([k, v]) => `${k} ${v}`).join(", "))}${s.warnings ? ` · <span class="err">${esc(s.warnings.join("; "))}</span>` : ""}</div>`;
+  const d = detail.get(s.session_id);
+  if (!d) { loadDetail(s.session_id); return agents + `<p class="sub">Loading where the tokens went…</p>`; }
+  if (d.error) return agents + `<p class="err">${esc(d.error)}</p>`;
+  const cats = Object.entries(d.categories);
+  const where = cats.length ? bars(cats.map(([k, v]) => [esc(k), v.carried_tokens, tok(v.carried_tokens), `${k}: ${v.calls} calls printed ${tok(v.output_tokens)}, carried ${tok(v.carried_tokens)}`]), HCLS[s.harness]) : `<p class="sub">No tool outputs.</p>`;
+  const largest = d.largest.slice(0, 6).map((o) => `<tr><td>${esc(o.agent)}</td><td>${esc(o.label)}<div class="mono muted ellip" title="${esc(o.sample)}">${esc(o.sample)}</div></td>
+    <td class="num">${tok(o.tokens)} × ${o.calls_after}</td><td class="num">${tok(o.carried)}${o.carried_usd != null ? `<div class="muted">${usd(o.carried_usd)}</div>` : ""}</td></tr>`).join("");
+  const tips = d.advice.length ? `<div class="tips">` + d.advice.map((t) => `<div class="tip"><b>${esc(t.title)}</b><p>${esc(t.evidence)}</p><p><span>Why:</span> ${esc(t.why)}</p><p><span>Try:</span> ${esc(t.try)}</p></div>`).join("") + `</div>`
+    : `<p class="sub">Nothing stands out in this session.</p>`;
+  const ask = askBox(s.session_id, answers.get(s.session_id) || {}, "What can I improve in this session?");
+  return agents + `<div class="grid2" style="margin-top:14px"><div><h3>Where its tokens went</h3>${where}
+    <h3>Largest tool outputs</h3><div class="scroll"><table><thead><tr><th>Agent</th><th>Command or file</th><th class="num">Printed × later calls</th><th class="num">Carried</th></tr></thead><tbody>${largest}</tbody></table></div></div>
+    <div><h3>What to improve</h3>${tips}<h3>Ask about this session</h3>${ask}</div></div>`;
+}
+
+async function loadDetail(sid) {
+  if (loading.has(sid)) return;
+  loading.add(sid);
+  try { const r = await fetch(`/api/session?id=${encodeURIComponent(sid)}`); const j = await r.json(); detail.set(sid, r.ok ? j : { error: j.error || r.statusText }); }
+  catch (e) { detail.set(sid, { error: e.message }); }
+  loading.delete(sid);
+  sessions();
+}
+
+function md(t) {
+  const out = []; let list = false;
+  for (let l of esc(t).split("\n")) {
+    l = l.replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/`([^`]+)`/g, "<code>$1</code>");
+    const m = l.match(/^\s*(?:[-*]|\d+\.)\s+(.*)/);
+    if (m) { if (!list) { out.push("<ul>"); list = true; } out.push(`<li>${m[1]}</li>`); continue; }
+    if (list) { out.push("</ul>"); list = false; }
+    const h = l.match(/^#+\s+(.*)/);
+    out.push(h ? `<p><b>${h[1]}</b></p>` : l.trim() ? `<p>${l}</p>` : "");
+  }
+  if (list) out.push("</ul>");
+  return out.join("");
+}
+
+/* ---------- breakdowns ---------- */
+function breakdowns() {
+  const hs = Object.keys(data.breakdown || {}).filter((h) => harness === "all" || h === harness).sort();
+  $("#breakdowns").innerHTML = hs.map((h) => {
+    const b = data.breakdown[h], cats = Object.entries(b.by_category || {}), secs = b.command_seconds || {};
+    const cc = h === "claude-code", max = Math.max(...cats.map(([, v]) => v.carried_tokens), 1);
+    const body = !cats.length ? `<div class="sub">No ${HNAME[h]} tool calls in this window.</div>` :
+      `<div class="bars"><div class="h">Kind of work (calls)</div><div class="h">Tokens carried into later prompts</div><div class="h num">Tokens</div>
+       <div class="h num u">${cc ? "≈ $" : ""}</div><div class="h num t">Run time</div>` +
+      cats.map(([k, v]) => { const key = `b:${h}:${k}`, isOpen = open.has(key);
+        return `<div class="r" data-key="${esc(key)}"><div><span class="caret">${isOpen ? "▾" : "▸"}</span>${esc(k)}&nbsp;<span class="muted">(${v.tool_calls})</span></div>
+          <div><div class="bar ${HCLS[h]}" style="width:${(v.carried_tokens / max * 100).toFixed(1)}%" data-tip="${esc(k)}: ${tok(v.carried_tokens)} carried from ${v.tool_calls} calls that printed ${tok(v.output_tokens)}"></div></div>
+          <div class="num">${tok(v.carried_tokens)}</div><div class="num u">${cc ? usd(v.carried_usd) : ""}</div><div class="num t">${secs[k] != null ? dur(secs[k]) : "—"}</div></div>` +
+          (isOpen ? `<div class="x">${catDetail(h, k, v)}</div>` : ""); }).join("") + `</div>`;
+    return `<section class="card"><h2>Where ${HNAME[h]} tokens go</h2><p class="sub" style="margin:0 0 12px">Each tool output is re-sent with every later model call in its thread. Carried = output size × those later calls (about 4 characters a token)${cc ? "; ≈ $ prices them at the model's cache-read rate" : ""}. Run time is time spent running those commands. Click a row for the commands, files and sessions behind it.</p>${body}</section>`;
+  }).join("");
+}
+function catDetail(h, k, v) {
+  const cc = h === "claude-code", t = v.carried_tokens || 1;
+  const roles = Object.entries(v.by_role || {}).sort((a, b) => b[1] - a[1]);
+  return `<div class="row" style="margin-bottom:6px"><div class="sub">${v.tool_calls} calls printed ${tok(v.output_tokens)} tokens (avg ${tok(v.output_tokens / v.tool_calls)}), carried into ${tok(v.carried_tokens)} tokens of later prompts.</div>
+      <div class="legend">${roles.map(([r, x]) => `<span><i style="background:var(${RCOL[r]})"></i>${ROLE[r]}${r === "worker" ? "s" : ""} ${pct(x / t)}</span>`).join("")}</div></div>
+    <div class="stack" style="margin-bottom:12px">${roles.map(([r, x]) => `<span style="flex:${x};background:var(${RCOL[r]})" data-tip="${ROLE[r]}: ${tok(x)}"></span>`).join("")}</div>
+    <div class="grid2"><div><h3>Commands and files</h3><div class="scroll"><table><thead><tr><th>What ran</th><th class="num">Calls</th><th class="num">Avg printed</th><th class="num">Largest</th><th class="num">Carried</th>${cc ? `<th class="num">≈ $</th>` : ""}</tr></thead><tbody>` +
+      v.labels.map((l) => `<tr><td><span class="mono" data-tip="${esc(l.sample)}">${esc(l.label)}</span></td><td class="num">${l.calls}</td><td class="num">${tok(l.output_tokens / l.calls)}</td>
+        <td class="num">${tok(l.max_output)}</td><td class="num">${tok(l.carried_tokens)}</td>${cc ? `<td class="num">${usd(l.carried_usd)}</td>` : ""}</tr>`).join("") +
+    `</tbody></table></div></div><div><h3>Sessions</h3><table><thead><tr><th>Project</th><th>Session</th><th class="num">Calls</th><th class="num">Carried</th></tr></thead><tbody>` +
+      v.sessions.map((s) => `<tr class="click" data-goto="${esc(s.session)}"><td>${esc(s.project)}</td><td class="mono">${esc(s.session.slice(0, 8))}</td><td class="num">${s.calls}</td><td class="num">${tok(s.carried_tokens)}</td></tr>`).join("") +
+    `</tbody></table></div></div><h3>Largest single outputs</h3><div class="scroll"><table><thead><tr><th>Agent</th><th>Call</th><th class="num">Printed × later calls</th><th class="num">Carried</th></tr></thead><tbody>` +
+      v.largest.slice(0, 8).map((o) => `<tr class="click" data-goto="${esc(o.session)}"><td>${esc(o.agent)}</td><td><div class="mono ellip" data-tip="${esc(o.sample)}">${esc(o.sample || o.label)}</div><div class="muted">${esc(o.project)} · ${esc(o.session.slice(0, 8))}</div></td>
+        <td class="num">${tok(o.tokens)} × ${o.calls_after}</td><td class="num">${tok(o.carried)}${o.carried_usd != null ? `<div class="muted">${usd(o.carried_usd)}</div>` : ""}</td></tr>`).join("") + `</tbody></table></div>`;
+}
+
+/* ---------- rules ---------- */
+function rules() {
+  const fsAll = findingsVisible();
+  const defs = [
+    ["R1 orchestrator share", `Orchestrator above ${pct(data.thresholds.orchestrator)} of a session`, "Every orchestrator call re-sends its whole context; coordination builds nothing."],
+    ["R2 report matches logs", "Run report disagrees with the logs", "Budgets and model choices are tuned from these numbers."],
+    ["R3 large tool output", `Tool output of ${tok(data.thresholds.output)} tokens or more`, "It is paid for again on every later call in that thread."],
+  ];
+  $("#rules").innerHTML = defs.map(([id, title, why]) => {
+    const fs = fsAll.filter((f) => f.rule === id).sort((a, b) => (b.carried || b.tokens || 0) - (a.carried || a.tokens || 0));
+    const badge = fs.length ? `<span class="badge warn">▲ ${fs.length} found</span>` : `<span class="badge ok">✓ clear</span>`;
+    const list = fs.slice(0, 5).map((f) => `<li><span class="mono">${esc((f.session || f.report || "").slice(0, 18))}</span> · ${esc(f.agent)}: ${esc(f.evidence)}</li>`).join("");
+    const more = fs.length > 5 ? `<li><a href="#" data-tile="rules">See all ${fs.length}</a></li>` : "";
+    return `<div class="rule"><h4>${title} ${badge}</h4><div class="sub">${why}</div>${fs.length ? `<ul>${list}${more}</ul>` : ""}</div>`;
+  }).join("");
+}
+
+const ENG = { claude: "Claude", codex: "ChatGPT" };
+function askBox(key, a, defaultQ) {
+  const ak = data.ask || {}, eng = ["claude", "codex"].filter((e) => (ak[e] || {}).available);
+  if (!eng.length) return `<p class="sub">Install the <span class="mono">claude</span> or <span class="mono">codex</span> command to ask questions here.</p>`;
+  return `<div class="ask" data-sid="${esc(key)}"><textarea aria-label="Question">${esc(a.q || defaultQ)}</textarea>
+    ${eng.map((e) => `<button class="primary ask-btn" data-with="${e}" ${a.busy ? "disabled" : ""}>${a.busy === e ? "Asking…" : "Ask " + ENG[e]}</button>`).join("")}</div>
+    ${["claude", "codex"].filter((e) => (a.ans || {})[e]).map((e) => `<div class="answer"><div class="muted" style="font-size:12px">${ENG[e]}</div>${md(a.ans[e])}</div>`).join("")}
+    ${a.error ? `<p class="err">${esc(a.error)}</p>` : ""}
+    <p class="sub">${eng.map((e) => e === "claude" ? `Claude runs <span class="mono">claude -p</span> with tools off${ak.claude.model ? ` on ${esc(ak.claude.model)}` : ""}` : `ChatGPT runs <span class="mono">codex exec</span> read-only in an empty folder${ak.codex.model ? ` on ${esc(ak.codex.model)}` : ""}`).join("; ")}. They see numbers and command names, not transcripts.</p>`;
+}
+function askAll() {
+  $("#ask-all").hidden = false;
+  $("#ask-all-body").innerHTML = askBox("*", answers.get("*" + harness) || {}, "Across these sessions, what are the biggest wastes and what should I change first?");
+}
+
+let reviewBusy = null, reviewErr = "";
+function review() {
+  const ak = (data && data.ask) || {}, eng = ["claude", "codex"].filter((e) => (ak[e] || {}).available), r = data && data.review;
+  $("#review-btns").innerHTML = eng.length ? eng.map((e) => `<button class="primary review-btn" data-with="${e}" ${reviewBusy ? "disabled" : ""}>${reviewBusy === e ? "Reviewing…" : "Run with " + ENG[e]}</button>`).join("")
+    : `<span class="sub">Needs the <span class="mono">claude</span> or <span class="mono">codex</span> command.</span>`;
+  $("#review-body").innerHTML = (reviewErr ? `<p class="err">${esc(reviewErr)}</p>` : "") + (r ? `<div class="answer"><div class="row"><span class="muted" style="font-size:12px">${ENG[r.with]} · ${new Date(r.at).toLocaleString()}</span>
+    <button id="review-dl">Download .md</button></div>${md(r.text)}</div>` : "");
+}
+async function runReview(engine) {
+  reviewBusy = engine; reviewErr = ""; review();
+  try { data = await post("/api/review", { with: engine }); detail.clear(); $("#days").value = "7"; }
+  catch (e) { reviewErr = "Review failed: " + e.message; }
+  reviewBusy = null; render();
+}
+
+function render() {
+  if (!data) return;
+  const s = data.sources, src = [s.claude && "Claude Code", s.codex && "Codex", s.reports && `${s.reports} report folder${s.reports > 1 ? "s" : ""}`].filter(Boolean).join(", ");
+  $("#meta").textContent = `${new Date(data.since).toLocaleDateString()} to ${new Date(data.until).toLocaleDateString()} · read ${src || "nothing"} in ${data.seconds}s · ran ${new Date(data.ran_at).toLocaleTimeString()}` +
+    (data.missing.length ? ` · not found: ${data.missing.join(", ")}` : "");
+  review(); tiles(); sessions(); askAll(); breakdowns(); rules();
+}
+
+async function post(url, body) {
+  const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", "X-Superfan": "1" }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({ error: r.statusText }));
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+}
+async function run() {
+  const btn = $("#run"); btn.disabled = true; btn.textContent = "Reading logs…"; $("#error").hidden = true;
+  try { data = await post("/api/run", { days: +$("#days").value }); detail.clear(); answers.clear(); render(); }
+  catch (e) { $("#error").hidden = false; $("#error").textContent = "Run failed: " + e.message; }
+  btn.disabled = false; btn.textContent = "Run now";
+}
+async function ask(box, engine) {
+  const sid = box.dataset.sid, all = sid === "*", key = all ? "*" + harness : sid, redraw = all ? askAll : sessions;
+  const q = $("textarea", box).value.trim() || "What can I improve?";
+  const prev = answers.get(key) || {}, ans = q === prev.q ? { ...(prev.ans || {}) } : {};
+  answers.set(key, { q, ans, busy: engine }); redraw();
+  try { const j = await post("/api/ask", { session: all ? "" : sid, harness, question: q, with: engine }); ans[engine] = j.answer; answers.set(key, { q, ans }); }
+  catch (e) { answers.set(key, { q, ans, error: "Ask failed: " + e.message }); }
+  redraw();
+}
+function goto(sid) {
+  const s = data.sessions.find((x) => x.session_id === sid); if (!s) return;
+  if (harness !== "all" && s.harness !== harness) setHarness("all");
+  open.add("s:" + sid);
+  if (harness === "all") open.add("p:" + s.project); else showAll = true;
+  sessions();
+  const el = document.getElementById("row-" + sid); if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+function setHarness(h) {
+  harness = h; showAll = false;
+  document.querySelectorAll("#harness button").forEach((x) => x.setAttribute("aria-pressed", x.dataset.h === h)); render();
+}
+
+$("#run").onclick = run;
+$("#harness").onclick = (e) => { const b = e.target.closest("button"); if (b) setHarness(b.dataset.h); };
+$("#tiles").onclick = (e) => { const b = e.target.closest(".tile"); if (!b) return; tile = tile === b.dataset.k ? null : b.dataset.k; tiles(); };
+document.addEventListener("click", (e) => {
+  const t = e.target;
+  if (t.closest("textarea, select, #harness, #tiles, #run")) return;
+  const rb = t.closest(".review-btn"); if (rb) { runReview(rb.dataset.with); return; }
+  if (t.id === "review-dl") {
+    const r = data.review, a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([r.text], { type: "text/markdown" }));
+    a.download = `superfan-review-${r.at.slice(0, 10)}.md`; a.click(); return;
+  }
+  const ab = t.closest(".ask-btn"); if (ab) { ask(ab.closest(".ask"), ab.dataset.with); return; }
+  if (t.closest(".ask, .tip, .answer")) return;
+  if (t.id === "more") { showAll = !showAll; sessions(); return; }
+  const tl = t.closest("[data-tile]"); if (tl) { e.preventDefault(); tile = tl.dataset.tile; tiles(); $("#tile-detail").scrollIntoView({ behavior: "smooth" }); return; }
+  const g = t.closest("[data-goto]"); if (g) { goto(g.dataset.goto); return; }
+  const k = t.closest("[data-key]");
+  if (k) { const key = k.dataset.key; open.has(key) ? open.delete(key) : open.add(key); key.startsWith("b:") ? breakdowns() : sessions(); }
+});
+document.addEventListener("mousemove", (e) => {
+  const t = e.target.closest("[data-tip]"), tip = $("#tip");
+  if (!t || !t.dataset.tip) { tip.style.display = "none"; return; }
+  tip.textContent = t.dataset.tip; tip.style.display = "block";
+  tip.style.left = Math.max(8, Math.min(e.clientX + 12, innerWidth - tip.offsetWidth - 8)) + "px"; tip.style.top = (e.clientY + 14) + "px";
+});
+fetch("/api/last").then((r) => r.json()).then((j) => {
+  if (j && j.sessions) { data = j; const o = [...$("#days").options].find((x) => +x.value === j.days); if (o) $("#days").value = o.value; render(); } else run();
+}).catch(() => {});
+</script>
+</body>
+</html>

@@ -1,0 +1,19 @@
+{
+  "_comment": "USD per million tokens, Anthropic first-party API list prices. Cache writes are 1.25x input (5-minute TTL) and 2x input (1-hour TTL). Codex and Copilot are never priced. Check https://www.anthropic.com/pricing before trusting these.",
+  "_as_of": "2026-10-06",
+  "models": {
+    "claude-fable-5-1":  {"input": 10.0, "output": 50.0, "cache_read": 0.25},
+    "claude-fable-5":    {"input": 10.0, "output": 50.0, "cache_read": 1.00},
+    "claude-opus-5-5":   {"input": 4.0,  "output": 20.0, "cache_read": 0.20},
+    "claude-opus-5":     {"input": 5.0,  "output": 25.0, "cache_read": 0.50},
+    "claude-opus-4-8":   {"input": 5.0,  "output": 25.0, "cache_read": 0.50},
+    "claude-opus-4-7":   {"input": 5.0,  "output": 25.0, "cache_read": 0.50},
+    "claude-opus-4-6":   {"input": 5.0,  "output": 25.0, "cache_read": 0.50},
+    "claude-sonnet-5-5": {"input": 2.0,  "output": 10.0, "cache_read": 0.20},
+    "claude-sonnet-5":   {"input": 2.0,  "output": 10.0, "cache_read": 0.20},
+    "claude-sonnet-4-6": {"input": 3.0,  "output": 15.0, "cache_read": 0.30},
+    "claude-haiku-5-5":  {"input": 0.10, "output": 0.50, "cache_read": 0.01},
+    "claude-haiku-4-5":  {"input": 1.0,  "output": 5.0,  "cache_read": 0.10}
+  },
+  "cache_write_multiplier": {"5m": 1.25, "1h": 2.0}
+}
