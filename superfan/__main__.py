@@ -132,16 +132,60 @@ def cmd_report(a: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_serve(a: argparse.Namespace) -> int:
-    from .serve import serve
+def _cfg(a: argparse.Namespace) -> dict:
+    """The settings `serve` and `review` share."""
     with open(a.prices or os.path.join(HERE, "prices.json")) as fh:
         prices = json.load(fh)
-    tz = _tz(a.tz) if a.tz else datetime.now().astimezone().tzinfo
-    cfg = {"claude": os.path.expanduser(a.claude) if a.claude else None,
-           "codex": os.path.expanduser(a.codex) if a.codex else None,
-           "reports": [os.path.expanduser(d) for d in a.reports], "tz": tz, "port": a.port, "prices": prices,
-           "orchestrator_limit": a.orchestrator_limit, "output_limit": a.output_limit, "ask_model": a.ask_model,
-           "ask_codex_model": a.ask_codex_model}
+    return {"claude": os.path.expanduser(a.claude) if a.claude else None,
+            "codex": os.path.expanduser(a.codex) if a.codex else None,
+            "reports": [os.path.expanduser(d) for d in a.reports or []],
+            "tz": _tz(a.tz) if a.tz else datetime.now().astimezone().tzinfo, "prices": prices,
+            "orchestrator_limit": a.orchestrator_limit, "output_limit": a.output_limit, "ask_model": a.ask_model,
+            "ask_codex_model": a.ask_codex_model, "reviews": os.path.expanduser(a.reviews) if a.reviews else None}
+
+
+def cmd_review(a: argparse.Namespace) -> int:
+    """One review of a run, a day or a window, saved outside the repo."""
+    from . import review
+    cfg = _cfg(a)
+    tz = cfg["tz"]
+    report, compare = None, 0
+    if a.run == "latest":  # for automatic runs: the newest report, once
+        found = review.latest_reports(cfg["reports"], 1)
+        if not found:
+            print("no run reports in --reports", file=sys.stderr)
+            return 0
+        a.run = found[0][1]
+        if any(r.get("report") == os.path.basename(a.run) for r in review.list_reviews(cfg["reviews"])):
+            print(f"{os.path.basename(a.run)} already reviewed", file=sys.stderr)
+            return 0
+    if a.run:
+        report = os.path.expanduser(a.run)
+        w = review.report_window(report, tz)
+        if not w:
+            print(f"{a.run}: no Start/End lines, so the run's window is unknown", file=sys.stderr)
+            return 2
+        scope, (since, until) = "run", w
+    elif a.since:
+        scope = "window"
+        since = datetime.fromisoformat(a.since)
+        until = datetime.fromisoformat(a.until) if a.until else datetime.now(tz)
+        since, until = (d if d.tzinfo else d.replace(tzinfo=tz) for d in (since, until))
+    else:
+        scope, compare = "day", a.compare
+        d = datetime.strptime(a.day, "%Y-%m-%d").date() if a.day and a.day != "today" else datetime.now(tz).date()
+        since, until = review.day_window(d, tz)
+    engines = [] if a.with_ == "none" else ["claude", "codex"] if a.with_ == "both" else [a.with_]
+    r = review.run(cfg, scope, since, until, report, engines, cfg["reviews"], compare)
+    print(r["markdown"] if not a.quiet else "", end="")
+    print(f"Saved {r['path']}", file=sys.stderr)
+    return 1 if r["errors"] and len(r["errors"]) == len(engines) else 0
+
+
+def cmd_serve(a: argparse.Namespace) -> int:
+    from .serve import serve
+    cfg = _cfg(a)
+    cfg["port"] = a.port
     if not a.no_open:
         import threading
         import webbrowser
@@ -195,8 +239,31 @@ def main(argv=None) -> int:
     w.add_argument("--output-limit", type=int, default=8000)
     w.add_argument("--ask-model", default="sonnet", help="model for the Ask Claude button ('' for your default)")
     w.add_argument("--ask-codex-model", default="", help="model for the Ask ChatGPT button (default: your Codex default)")
+    w.add_argument("--reviews", help="folder for saved reviews (default: $SUPERFAN_REVIEWS or ~/.superfan/reviews)")
     w.add_argument("--no-open", action="store_true", help="do not open the browser")
     w.set_defaults(fn=cmd_serve)
+    v = sub.add_parser("review", help="review a run, a day or a window; a model writes the summary, the numbers are computed")
+    g = v.add_mutually_exclusive_group()
+    g.add_argument("--run", metavar="REPORT", help="a run report (docs/runs/<name>.md): every session in its window, plus the report-vs-logs check; "
+                        "'latest' takes the newest report in --reports and skips it if already reviewed")
+    g.add_argument("--day", nargs="?", const="today", metavar="YYYY-MM-DD", help="all sessions that day (the default: today)")
+    g.add_argument("--since", help="start of a custom window (ISO date/time, local time if no offset)")
+    v.add_argument("--until", help="end of the custom window (default: now)")
+    v.add_argument("--compare", type=int, default=6, help="with --day: how many previous days to compare with")
+    v.add_argument("--with", dest="with_", choices=["claude", "codex", "both", "none"], default="claude",
+                   help="who writes the summary: claude (default), codex, both, or none for numbers only")
+    v.add_argument("--claude", default="~/.claude/projects", help="Claude Code projects folder ('' to skip)")
+    v.add_argument("--codex", default="~/.codex/sessions", help="Codex sessions folder ('' to skip)")
+    v.add_argument("--reports", nargs="*", default=[])
+    v.add_argument("--tz", help="UTC offset of your local day and of run reports (default: this computer's)")
+    v.add_argument("--prices")
+    v.add_argument("--orchestrator-limit", type=float, default=0.40)
+    v.add_argument("--output-limit", type=int, default=8000)
+    v.add_argument("--ask-model", default="sonnet")
+    v.add_argument("--ask-codex-model", default="")
+    v.add_argument("--reviews", help="folder to save to (default: $SUPERFAN_REVIEWS or ~/.superfan/reviews)")
+    v.add_argument("--quiet", action="store_true", help="only print where it was saved")
+    v.set_defaults(fn=cmd_review)
     a = p.parse_args(argv)
     return a.fn(a)
 

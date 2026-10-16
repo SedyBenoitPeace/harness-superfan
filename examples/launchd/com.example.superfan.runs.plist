@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  A review each time a run report appears in a project's docs/runs folder.
+  `review` with `run latest` reviews the newest report once and does nothing if it
+  was already reviewed. Copy to ~/Library/LaunchAgents/, replace every
+  /PATH/TO/... and YOUR-NAME, then:  launchctl load ~/Library/LaunchAgents/com.example.superfan.runs.plist
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.example.superfan.runs</string>
+  <key>WorkingDirectory</key><string>/PATH/TO/harness-superfan</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/python3</string><string>-m</string><string>superfan</string>
+    <string>review</string><string>--run</string><string>latest</string><string>--quiet</string>
+    <string>--reports</string><string>/PATH/TO/PROJECT/docs/runs</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>/PATH/TO/CLAUDE/BIN:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+  </dict>
+  <!-- add one <string> per project; launchd starts the job when a folder changes -->
+  <key>WatchPaths</key>
+  <array><string>/PATH/TO/PROJECT/docs/runs</string></array>
+  <!-- the report is written in a few steps; wait before the next start -->
+  <key>ThrottleInterval</key><integer>60</integer>
+  <key>StandardErrorPath</key><string>/Users/YOUR-NAME/.superfan/launchd-runs.log</string>
+</dict>
+</plist>

@@ -121,6 +121,20 @@ tr.child > td:first-child { padding-left: 22px; }
 .scroll { overflow-x: auto; }
 .more { margin-top: 8px; }
 a { color: inherit; }
+nav.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--ring); margin: -8px 0 16px; }
+nav.tabs button { border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: transparent; padding: 8px 12px; color: var(--ink-2); }
+nav.tabs button[aria-selected="true"] { border-bottom-color: var(--ink); color: var(--ink); font-weight: 600; }
+.form { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; }
+.form label[hidden] { display: none; }
+.form label { display: grid; gap: 3px; font-size: 12px; color: var(--ink-2); }
+input { font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--axis); border-radius: 8px; padding: 5px 8px; }
+.rv { display: grid; grid-template-columns: minmax(220px, 300px) 1fr; gap: 16px; }
+.rv > div { min-width: 0; }
+.rvlist { display: grid; gap: 6px; align-content: start; max-height: 70vh; overflow-y: auto; }
+.rvlist button { text-align: left; display: grid; gap: 2px; }
+.rvlist button[aria-current="true"] { border-color: var(--ink); box-shadow: inset 3px 0 0 var(--ink); }
+.rvlist small { color: var(--ink-2); }
+.answer h3 { font-size: 14px; margin: 12px 0 4px; } .answer h2 { font-size: 16px; margin: 0 0 6px; }
 @media (max-width: 640px) {
   .hide-sm { display: none; }
   .bars { grid-template-columns: 130px 1fr 56px; } .bars .t, .bars .u { display: none; }
@@ -128,6 +142,7 @@ a { color: inherit; }
   .split { width: 80px; min-width: 64px; }
   .grid2 { grid-template-columns: 1fr; }
   .ellip { max-width: 200px; }
+  .rv { grid-template-columns: 1fr; } .rvlist { max-height: 240px; }
 }
 </style>
 </head>
@@ -154,17 +169,37 @@ a { color: inherit; }
     </div>
   </header>
 
+  <nav class="tabs" role="tablist">
+    <button role="tab" data-tab="sessions" aria-selected="true">Sessions</button>
+    <button role="tab" data-tab="reviews" aria-selected="false">Reviews</button>
+  </nav>
   <div id="error" class="card err" hidden></div>
-  <section class="card" id="review">
-    <div class="row">
-      <div>
-        <h2>Weekly review</h2>
-        <div class="sub">The review the Monday routine runs: reads the last 7 days, runs the health rules, and has a model write the report (top sessions, what fired, what to change first, kit issues worth filing). Nothing is filed or saved.</div>
+  <div id="tab-reviews" hidden>
+    <section class="card">
+      <h2>Run a review</h2>
+      <p class="sub" style="margin:0 0 10px">The numbers are computed from your logs; a model only writes the summary, from those numbers (no transcripts). Each review is saved to <span class="mono" id="rv-dir">your reviews folder</span>, outside the repo. Same as <span class="mono">superfan review</span> in a terminal.</p>
+      <div class="form">
+        <label>Scope<select id="rv-scope">
+          <option value="day">One day, compared with the 6 before</option>
+          <option value="run">One run (with the report-vs-logs check)</option>
+          <option value="window">Custom window</option></select></label>
+        <label id="rv-day-l">Day<input type="date" id="rv-day"></label>
+        <label id="rv-run-l" hidden>Run report<select id="rv-run"></select></label>
+        <label id="rv-since-l" hidden>From<input type="datetime-local" id="rv-since"></label>
+        <label id="rv-until-l" hidden>To<input type="datetime-local" id="rv-until"></label>
+        <label>Summary by<select id="rv-with">
+          <option value="claude">Claude</option><option value="codex">ChatGPT</option>
+          <option value="both">Claude, then ChatGPT</option><option value="none">Numbers only</option></select></label>
+        <button class="primary" id="rv-go">Run review</button>
       </div>
-      <div class="controls" id="review-btns"></div>
-    </div>
-    <div id="review-body"></div>
-  </section>
+      <p class="err" id="rv-err" hidden></p>
+    </section>
+    <section class="card">
+      <h2>Saved reviews</h2>
+      <div class="rv"><div class="rvlist" id="rv-list"><div class="empty">No reviews yet.</div></div><div id="rv-view"></div></div>
+    </section>
+  </div>
+  <div id="tab-sessions">
   <section class="tiles" id="tiles"></section>
   <section class="card" id="tile-detail" hidden></section>
 
@@ -195,7 +230,8 @@ a { color: inherit; }
     <h2>Health rules</h2>
     <div id="rules" class="sub">Nothing yet.</div>
   </section>
-  <p class="sub">Reads logs on this computer only. Claude Code dollars use API list prices; Codex is shown in tokens. “Ask Claude” and “Ask ChatGPT” send one session's numbers and command names (no transcript) to your local <span class="mono">claude</span> or <span class="mono">codex</span> command.</p>
+  </div>
+  <p class="sub">Reads logs on this computer only. Claude Code dollars use API list prices; Codex is shown in tokens. “Ask” and “Run review” send numbers and command names (no transcript) to your local <span class="mono">claude</span> or <span class="mono">codex</span> command. Reviews are the only files it writes.</p>
 </main>
 <div id="tip"></div>
 <script>
@@ -408,7 +444,8 @@ function md(t) {
     if (m) { if (!list) { out.push("<ul>"); list = true; } out.push(`<li>${m[1]}</li>`); continue; }
     if (list) { out.push("</ul>"); list = false; }
     const h = l.match(/^#+\s+(.*)/);
-    out.push(h ? `<p><b>${h[1]}</b></p>` : l.trim() ? `<p>${l}</p>` : "");
+    const lv = h ? l.match(/^#+/)[0].length : 0;
+    out.push(h ? (lv === 1 ? `<h2>${h[1]}</h2>` : `<h3>${h[1]}</h3>`) : l.trim() ? `<p>${l}</p>` : "");
   }
   if (list) out.push("</ul>");
   return out.join("");
@@ -479,19 +516,57 @@ function askAll() {
   $("#ask-all-body").innerHTML = askBox("*", answers.get("*" + harness) || {}, "Across these sessions, what are the biggest wastes and what should I change first?");
 }
 
-let reviewBusy = null, reviewErr = "";
-function review() {
-  const ak = (data && data.ask) || {}, eng = ["claude", "codex"].filter((e) => (ak[e] || {}).available), r = data && data.review;
-  $("#review-btns").innerHTML = eng.length ? eng.map((e) => `<button class="primary review-btn" data-with="${e}" ${reviewBusy ? "disabled" : ""}>${reviewBusy === e ? "Reviewing…" : "Run with " + ENG[e]}</button>`).join("")
-    : `<span class="sub">Needs the <span class="mono">claude</span> or <span class="mono">codex</span> command.</span>`;
-  $("#review-body").innerHTML = (reviewErr ? `<p class="err">${esc(reviewErr)}</p>` : "") + (r ? `<div class="answer"><div class="row"><span class="muted" style="font-size:12px">${ENG[r.with]} · ${new Date(r.at).toLocaleString()}</span>
-    <button id="review-dl">Download .md</button></div>${md(r.text)}</div>` : "");
+/* ---------- reviews ---------- */
+let rv = { list: null, reports: [], open: null, text: "", busy: false };
+const SCOPE = { day: "Day", run: "Run", window: "Window" };
+async function loadReviews(openName) {
+  const j = await (await fetch("/api/reviews")).json();
+  rv.list = j.reviews; rv.reports = j.reports; $("#rv-dir").textContent = j.dir;
+  if (!$("#rv-day").value) $("#rv-day").value = j.today;
+  $("#rv-run").innerHTML = j.reports.length ? j.reports.map((r) => `<option value="${esc(r.id)}">${esc(r.project)} · ${esc(r.name)}</option>`).join("")
+    : `<option value="">No run reports (start serve with --reports)</option>`;
+  reviewList();
+  const name = openName || rv.open || (rv.list[0] || {}).name;
+  if (name) openReview(name);
 }
-async function runReview(engine) {
-  reviewBusy = engine; reviewErr = ""; review();
-  try { data = await post("/api/review", { with: engine }); detail.clear(); $("#days").value = "7"; }
-  catch (e) { reviewErr = "Review failed: " + e.message; }
-  reviewBusy = null; render();
+function reviewList() {
+  $("#rv-list").innerHTML = rv.list && rv.list.length ? rv.list.map((r) => {
+    const when = r.made_at ? new Date(r.made_at).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : r.name.slice(0, 10);
+    const what = r.scope === "run" ? r.report : r.scope === "day" ? (r.since || "").slice(0, 10) : `${(r.since || "").slice(0, 16).replace("T", " ")} to ${(r.until || "").slice(0, 16).replace("T", " ")}`;
+    return `<button data-review="${esc(r.name)}" aria-current="${r.name === rv.open}"><b>${SCOPE[r.scope] || r.scope}: ${esc(what || "")}</b>
+      <small>${when}${r.tokens != null ? " · " + tok(r.tokens) + " tokens" : ""}${r.engines ? " · " + (r.engines.map((e) => ENG[e]).join(" + ") || "numbers only") : ""}</small></button>`;
+  }).join("") : `<div class="empty">No reviews yet. Run one above.</div>`;
+}
+async function openReview(name) {
+  rv.open = name; reviewList();
+  const r = await fetch("/api/review?name=" + encodeURIComponent(name));
+  const j = await r.json();
+  rv.text = j.markdown || "";
+  $("#rv-view").innerHTML = r.ok ? `<div class="answer" style="margin-top:0"><div class="row"><span class="muted mono" style="font-size:12px">${esc(name)}</span><button id="review-dl">Download .md</button></div>${md(rv.text)}</div>`
+    : `<p class="err">${esc(j.error)}</p>`;
+}
+function scopeInputs() {
+  const s = $("#rv-scope").value;
+  $("#rv-day-l").hidden = s !== "day"; $("#rv-run-l").hidden = s !== "run";
+  $("#rv-since-l").hidden = $("#rv-until-l").hidden = s !== "window";
+}
+async function runReview() {
+  const s = $("#rv-scope").value, btn = $("#rv-go"), err = $("#rv-err");
+  const body = { scope: s, with: $("#rv-with").value, day: $("#rv-day").value, report: $("#rv-run").value, since: $("#rv-since").value, until: $("#rv-until").value };
+  btn.disabled = true; btn.textContent = body.with === "none" ? "Counting…" : "Reviewing…"; err.hidden = true;
+  try {
+    const j = await post("/api/review", body);
+    const failed = Object.entries(j.errors || {});
+    if (failed.length) { err.hidden = false; err.textContent = failed.map(([e, m]) => `${ENG[e]} could not write a summary: ${m}`).join(" "); }
+    await loadReviews(j.name);
+  } catch (e) { err.hidden = false; err.textContent = "Review failed: " + e.message; }
+  btn.disabled = false; btn.textContent = "Run review";
+}
+function setTab(t) {
+  document.querySelectorAll("nav.tabs button").forEach((b) => b.setAttribute("aria-selected", b.dataset.tab === t));
+  $("#tab-sessions").hidden = t !== "sessions"; $("#tab-reviews").hidden = t !== "reviews";
+  if (t === "reviews" && !rv.list) loadReviews().catch((e) => { $("#rv-list").innerHTML = `<p class="err">${esc(e.message)}</p>`; });
+  try { localStorage.setItem("superfan-tab", t); } catch (e) {}
 }
 
 function render() {
@@ -499,7 +574,7 @@ function render() {
   const s = data.sources, src = [s.claude && "Claude Code", s.codex && "Codex", s.reports && `${s.reports} report folder${s.reports > 1 ? "s" : ""}`].filter(Boolean).join(", ");
   $("#meta").textContent = `${new Date(data.since).toLocaleDateString()} to ${new Date(data.until).toLocaleDateString()} · read ${src || "nothing"} in ${data.seconds}s · ran ${new Date(data.ran_at).toLocaleTimeString()}` +
     (data.missing.length ? ` · not found: ${data.missing.join(", ")}` : "");
-  review(); tiles(); sessions(); askAll(); breakdowns(); rules();
+  tiles(); sessions(); askAll(); breakdowns(); rules();
 }
 
 async function post(url, body) {
@@ -537,16 +612,19 @@ function setHarness(h) {
 }
 
 $("#run").onclick = run;
+$("#rv-scope").onchange = scopeInputs;
 $("#harness").onclick = (e) => { const b = e.target.closest("button"); if (b) setHarness(b.dataset.h); };
 $("#tiles").onclick = (e) => { const b = e.target.closest(".tile"); if (!b) return; tile = tile === b.dataset.k ? null : b.dataset.k; tiles(); };
 document.addEventListener("click", (e) => {
   const t = e.target;
-  if (t.closest("textarea, select, #harness, #tiles, #run")) return;
-  const rb = t.closest(".review-btn"); if (rb) { runReview(rb.dataset.with); return; }
+  if (t.closest("textarea, select, input, #harness, #tiles, #run")) return;
+  const tb = t.closest("nav.tabs button"); if (tb) { setTab(tb.dataset.tab); return; }
+  if (t.id === "rv-go") { runReview(); return; }
+  const rb = t.closest("[data-review]"); if (rb) { openReview(rb.dataset.review); return; }
   if (t.id === "review-dl") {
-    const r = data.review, a = document.createElement("a");
-    a.href = URL.createObjectURL(new Blob([r.text], { type: "text/markdown" }));
-    a.download = `superfan-review-${r.at.slice(0, 10)}.md`; a.click(); return;
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([rv.text], { type: "text/markdown" }));
+    a.download = rv.open; a.click(); return;
   }
   const ab = t.closest(".ask-btn"); if (ab) { ask(ab.closest(".ask"), ab.dataset.with); return; }
   if (t.closest(".ask, .tip, .answer")) return;
@@ -562,6 +640,7 @@ document.addEventListener("mousemove", (e) => {
   tip.textContent = t.dataset.tip; tip.style.display = "block";
   tip.style.left = Math.max(8, Math.min(e.clientX + 12, innerWidth - tip.offsetWidth - 8)) + "px"; tip.style.top = (e.clientY + 14) + "px";
 });
+try { if (localStorage.getItem("superfan-tab") === "reviews") setTab("reviews"); } catch (e) {}
 fetch("/api/last").then((r) => r.json()).then((j) => {
   if (j && j.sessions) { data = j; const o = [...$("#days").options].find((x) => +x.value === j.days); if (o) $("#days").value = o.value; render(); } else run();
 }).catch(() => {});

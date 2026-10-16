@@ -6,7 +6,8 @@ subagent, model, cache use, tool calls, time. Built to watch runs of the
 [Agent Harness Kit](https://github.com/SedyBenoitPeace/agent-harness-kit), but
 the parser works on any Claude Code or Codex session.
 
-Read-only: it opens log files and prints. Python 3.10+, standard library only.
+Read-only on your logs: it opens them and prints. The one thing it writes is
+a review you ask for, saved outside the repo (see Reviews). Python 3.10+, standard library only.
 
 ## Use
 
@@ -46,18 +47,16 @@ applies to the whole page:
   Questions asked this way never show up as sessions in the page. The same
   two buttons on the home page ask across every session in the window and
   harness filter (totals, the 40 largest sessions, the breakdown, findings).
-- **Weekly review**: a fresh 7-day read plus the health rules, written up by
-  Claude or ChatGPT (top sessions, what fired, changes to make first, kit
-  issues worth filing). Shown on the page with a Download .md button; nothing
-  is filed or saved.
+- **Reviews** tab: run a review of one day, one run or a custom window (see
+  below), and read the saved ones, newest first, with a Download .md button.
 - **Where tokens go**, one card per harness; click a kind of work for the
   commands and files behind it, the sessions, and the largest single outputs.
 
 It reads `~/.claude/projects` and `~/.codex/sessions` by default
 (`--claude ''` or `--codex ''` turns one off). It listens on 127.0.0.1 only,
 refuses other Host headers, needs a custom header on anything that does work
-(so other websites can't trigger it), writes nothing, and keeps the last
-result in memory. `python3 -m superfan report` prints the overview in the
+(so other websites can't trigger it), and keeps the last result in memory.
+The only files it writes are reviews. `python3 -m superfan report` prints the overview in the
 terminal.
 
 Each session row has: `harness`, `project` (working folder name), `models`,
@@ -70,6 +69,46 @@ fields per orchestrator, subagent and approval reviewer.
 Dollars use `superfan/prices.json` (Anthropic API list prices). On a
 subscription that is the API-equivalent value, not your bill. Pass
 `--prices` to use your own table.
+
+## Reviews
+
+```sh
+python3 -m superfan review --day                 # today, compared with the 6 days before
+python3 -m superfan review --day 2026-10-15
+python3 -m superfan review --run ~/src/app/docs/runs/2026-10-15-1417.md   # one run, plus R2
+python3 -m superfan review --since 2026-10-13 --until 2026-10-15T12:00
+```
+
+Python computes every number: totals per harness (dollars for Claude Code
+only), the largest sessions, the top 3 problems (the page's "What to improve"
+tips, grouped across sessions and ordered by tokens at stake), the health
+rules, and for `--run` whether the run report agrees with the logs. A model
+then writes a short summary from those numbers only: `claude -p` with every
+tool off by default, `--with codex` for ChatGPT, `--with both` for a second
+opinion, `--with none` for numbers only. It never sees a transcript, and if
+the model is missing the numbers are still saved.
+
+Each review is saved as `<date-time>-<scope>.md` plus a `.json` of the
+numbers in `~/.superfan/reviews` (or `$SUPERFAN_REVIEWS`, or `--reviews DIR`).
+Keep that folder outside any repository: reviews describe your own sessions
+and projects. The page's Reviews tab runs the same command and lists the
+same folder.
+
+### Automatic reviews (optional, macOS)
+
+The repo has no schedule; reviews run when you ask. To run them on their own,
+`examples/launchd/` has two launchd agents with placeholder paths:
+
+- `com.example.superfan.daily.plist`: `review --day` every evening at 21:00.
+- `com.example.superfan.runs.plist`: watches your projects' `docs/runs`
+  folders and runs `review --run latest` when a report appears. `latest`
+  takes the newest report and skips it if it was already reviewed.
+
+Copy one to `~/Library/LaunchAgents/`, replace every `/PATH/TO/...` and
+`YOUR-NAME` (set `PATH` so launchd finds `claude` and `codex`), then
+`launchctl load ~/Library/LaunchAgents/<file>`. `launchctl unload` turns it
+off. Keep your filled-in copies out of the repo. On Linux, a cron line or a
+systemd timer running the same command does the same job.
 
 ## Health rules
 
@@ -110,7 +149,8 @@ data (MIT). Never commit a real session log, trimmed or not.
 
 ## Not yet
 
-Copilot CLI logs; Codex `.jsonl.zst` archives; R2 for Claude Code runs.
+Copilot CLI logs; Codex `.jsonl.zst` archives; R2 for Claude Code runs;
+Windows scheduling examples.
 
 ## License
 

@@ -7,3 +7,5 @@ __pycache__/
 /*.json
 !/superfan/prices.json
 *-review-*.md
+/reviews/
+*.plist.local

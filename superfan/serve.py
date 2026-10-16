@@ -1,9 +1,11 @@
 """A local web page for the Superfan: `python3 -m superfan serve`.
 
 Listens on 127.0.0.1 only and reads log folders as the user running it.
-Nothing is written. The only thing that leaves the machine is the optional
-"Ask Claude" / "Ask ChatGPT" question, which sends one session's numbers (no
-transcript) to the local `claude` or `codex` CLI, only when you press it.
+The only files it writes are reviews you ask for, in the reviews folder
+(~/.superfan/reviews by default, outside any repository). The only thing that
+leaves the machine is the optional "Ask" or "Run review" request, which sends
+numbers and command names (no transcript) to the local `claude` or `codex` CLI,
+only when you press it.
 """
 
 from __future__ import annotations
@@ -18,7 +20,7 @@ from urllib.parse import parse_qs, urlparse
 
 from .parse import scan, Prices
 from .breakdown import codex_outputs, claude_outputs, summarise
-from . import rules, advice
+from . import rules, advice, review
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PAGE = os.path.join(HERE, "web", "index.html")
@@ -111,6 +113,19 @@ def make_handler(cfg: dict):
                     return self._json(404, {"error": "Session not in the last run. Press Run now."})
                 return self._json(200, advice.session_detail(s, state["outputs"].get(sid, []),
                                                              cfg["orchestrator_limit"], cfg["output_limit"]))
+            if url.path == "/api/reviews":
+                return self._json(200, {
+                    "dir": cfg.get("reviews") or review.default_dir(),
+                    "reviews": review.list_reviews(cfg.get("reviews")),
+                    "reports": [{"id": rid, "name": os.path.basename(p), "project": os.path.basename(
+                        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(p)))))}
+                                for rid, p in review.latest_reports(cfg["reports"])],
+                    "today": datetime.now(cfg["tz"]).date().isoformat()})
+            if url.path == "/api/review":
+                text = review.load(q.get("name", [""])[0], cfg.get("reviews"))
+                if text is None:
+                    return self._json(404, {"error": "No such review."})
+                return self._json(200, {"name": q["name"][0], "markdown": text})
             self._send(404, b"not found", "text/plain")
 
         def do_POST(self):
@@ -137,22 +152,33 @@ def make_handler(cfg: dict):
                         return self._json(500, {"error": repr(e)})
                 return self._json(200, state["last"])
             if url.path == "/api/review":
-                # The weekly review on demand: a fresh 7-day read, then one model writes the report.
-                engine = "codex" if body.get("with") == "codex" else "claude"
-                model = cfg.get("ask_codex_model" if engine == "codex" else "ask_model") or ""
-                with state["lock"]:
-                    try:
-                        state["last"], state["outputs"] = run_once(cfg, 7)
-                    except Exception as e:
-                        return self._json(500, {"error": repr(e)})
-                prompt = advice.overview_prompt(state["last"], state["outputs"], "all", advice.REVIEW_QUESTION,
-                                                cfg["orchestrator_limit"], cfg["output_limit"])
+                # The same review as `superfan review`: numbers computed here, summary by a model, saved to disk.
+                engines = {"claude": ["claude"], "codex": ["codex"], "both": ["claude", "codex"], "none": []}.get(
+                    body.get("with"), ["claude"])
+                scope, tz, report, compare = body.get("scope"), cfg["tz"], None, 0
                 try:
-                    text = advice.ask(prompt, model, timeout=400, engine=engine)
+                    if scope == "run":
+                        report = dict(review.latest_reports(cfg["reports"], 200)).get(str(body.get("report") or ""))
+                        w = report and review.report_window(report, tz)
+                        if not w:
+                            return self._json(400, {"error": "Pick a run report with Start and End lines."})
+                        since, until = w
+                    elif scope == "window":
+                        since, until = (datetime.fromisoformat(str(body[k])) for k in ("since", "until"))
+                        since, until = (d if d.tzinfo else d.replace(tzinfo=tz) for d in (since, until))
+                        if not since < until:
+                            return self._json(400, {"error": "The window's start must be before its end."})
+                    else:
+                        scope, compare = "day", 6
+                        d = datetime.strptime(str(body.get("day") or datetime.now(tz).date()), "%Y-%m-%d").date()
+                        since, until = review.day_window(d, tz)
+                except (KeyError, ValueError):
+                    return self._json(400, {"error": "Dates must look like 2026-10-16 or 2026-10-16T09:00."})
+                try:
+                    r = review.run(cfg, scope, since, until, report, engines, cfg.get("reviews"), compare)
                 except Exception as e:
-                    return self._json(502, {"error": str(e), "data": state["last"]})
-                state["last"]["review"] = {"with": engine, "at": datetime.now(timezone.utc).isoformat(), "text": text}
-                return self._json(200, state["last"])
+                    return self._json(500, {"error": repr(e)})
+                return self._json(200, {"name": r["name"], "markdown": r["markdown"], "errors": r["errors"]})
             if url.path == "/api/ask":
                 sid = str(body.get("session") or "")
                 question = str(body.get("question") or "What can I improve in this session?")[:1000]

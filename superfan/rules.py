@@ -81,26 +81,32 @@ def report_vs_logs(report_dirs: list, codex_root=None, claude_root=None, prices=
         if not os.path.isdir(d):
             continue
         for name in sorted(os.listdir(d)):
-            if not name.endswith(".md"):
-                continue
-            rep = parse_run_report(os.path.join(d, name), tz)
-            problems = list(rep["problems"])
-            # windows come from commit times to the minute; too short to compare reliably
-            if "tokens" in rep and "start" in rep and codex_root and rep["end"] - rep["start"] >= timedelta(minutes=5):
-                project = os.path.basename(os.path.dirname(os.path.dirname(os.path.abspath(d))))
-                logs = [s for s in scan(None, codex_root, prices, rep["start"], rep["end"]) if s["project"] == project]
-                total = sum(s["tokens"]["total"] for s in logs)
-                orch = sum(a["tokens"]["total"] for s in logs for a in s["agents"] if a["role"] != "worker")
-                said = rep["tokens"]
-                if total and said["total"] is not None and abs(said["total"] - total) / total > tolerance:
-                    problems.append(f"report says {said['total']:,.0f} tokens, logs say {total:,} for the same window")
-                if orch and said["orchestration"] is not None and abs(said["orchestration"] - orch) / orch > tolerance:
-                    problems.append(f"report says orchestration {said['orchestration']:,.0f}, logs say {orch:,}")
-            if problems:
-                out.append({"rule": "R2 report matches logs", "report": rep["path"], "agent": "run report",
-                            "tokens": None, "evidence": "; ".join(problems),
-                            "why": "budgets, the orchestration split and model choice are tuned from these numbers"})
+            if name.endswith(".md"):
+                out += check_report(os.path.join(d, name), codex_root, claude_root, prices, tz, tolerance)
     return out
+
+
+def check_report(path: str, codex_root=None, claude_root=None, prices=None,
+                 tz: timezone = timezone.utc, tolerance: float = 0.10) -> list:
+    """R2 for one run report (docs/runs/<name>.md); its project is the folder above docs/."""
+    rep = parse_run_report(path, tz)
+    problems = list(rep["problems"])
+    # windows come from commit times to the minute; too short to compare reliably
+    if "tokens" in rep and "start" in rep and codex_root and rep["end"] - rep["start"] >= timedelta(minutes=5):
+        project = os.path.basename(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(path)))))
+        logs = [s for s in scan(None, codex_root, prices, rep["start"], rep["end"]) if s["project"] == project]
+        total = sum(s["tokens"]["total"] for s in logs)
+        orch = sum(a["tokens"]["total"] for s in logs for a in s["agents"] if a["role"] != "worker")
+        said = rep["tokens"]
+        if total and said["total"] is not None and abs(said["total"] - total) / total > tolerance:
+            problems.append(f"report says {said['total']:,.0f} tokens, logs say {total:,} for the same window")
+        if orch and said["orchestration"] is not None and abs(said["orchestration"] - orch) / orch > tolerance:
+            problems.append(f"report says orchestration {said['orchestration']:,.0f}, logs say {orch:,}")
+    if not problems:
+        return []
+    return [{"rule": "R2 report matches logs", "report": rep["path"], "agent": "run report",
+             "tokens": None, "evidence": "; ".join(problems),
+             "why": "budgets, the orchestration split and model choice are tuned from these numbers"}]
 
 
 # R3 ------------------------------------------------------------------------
