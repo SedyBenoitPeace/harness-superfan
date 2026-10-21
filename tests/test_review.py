@@ -109,6 +109,24 @@ class RunReports(unittest.TestCase):
             self.assertEqual(who[b], "")  # no sessions in that project, no dollars
             self.assertEqual(who[c], "Claude Code")  # only the Claude Code edition writes dollars
 
+    def test_window_comes_from_the_commits(self):
+        import subprocess
+        from datetime import timedelta
+        with tempfile.TemporaryDirectory() as d:
+            repo = os.path.join(d, "repo")
+            os.makedirs(os.path.join(repo, "docs", "runs"))
+            env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com", "GIT_COMMITTER_NAME": "t",
+                   "GIT_COMMITTER_EMAIL": "t@example.com", "GIT_COMMITTER_DATE": "2026-01-05T09:00:00+02:00"}
+            subprocess.run(["git", "init", "-q", repo], check=True)
+            subprocess.run(["git", "-C", repo, "commit", "-q", "--allow-empty", "-m", "x"], check=True, env=env)
+            h = subprocess.run(["git", "-C", repo, "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
+            p = os.path.join(repo, "docs", "runs", "r.md")
+            with open(p, "w") as fh:  # printed in +02:00, read on a computer now at +03:00
+                fh.write(f"- Start: {h} (2026-01-05 09:00)\n- End: {h} (2026-01-05 09:00)\n")
+            rep = review.rules.parse_run_report(p, timezone(timedelta(hours=3)))
+        self.assertEqual(rep["start"], datetime(2026, 1, 5, 7, tzinfo=timezone.utc))
+        self.assertEqual(rep["end"], datetime(2026, 1, 5, 7, 1, tzinfo=timezone.utc))
+
     def test_run_review_keeps_to_the_report_project(self):
         with tempfile.TemporaryDirectory() as d:
             here = review.build(CFG, "run", datetime(2026, 1, 5, 9, tzinfo=timezone.utc),

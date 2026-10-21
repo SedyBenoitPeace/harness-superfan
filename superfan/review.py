@@ -298,7 +298,7 @@ def prune(days: float, out_dir: str | None = None) -> list:
     return [n for n in old if delete(n, out_dir)]
 
 
-def latest_reports(report_dirs: list, limit: int = 20) -> list:
+def latest_reports(report_dirs: list, limit: int = 60) -> list:
     """Run reports (docs/runs/*.md) newest first, as (id, path) where id is 'n:name'."""
     found = []
     for i, d in enumerate(report_dirs):

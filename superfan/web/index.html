@@ -195,6 +195,7 @@ input { font: inherit; color: var(--ink); background: var(--surface); border: 1p
           <option value="run">One run (with the report-vs-logs check)</option>
           <option value="window">Custom window</option></select></label>
         <label id="rv-day-l">Day<input type="date" id="rv-day"></label>
+        <label id="rv-rday-l" hidden>Run day<select id="rv-rday"></select></label>
         <label id="rv-run-l" hidden>Run report<select id="rv-run"></select></label>
         <label id="rv-since-l" hidden>From<input type="datetime-local" id="rv-since"></label>
         <label id="rv-until-l" hidden>To<input type="datetime-local" id="rv-until"></label>
@@ -570,13 +571,21 @@ async function loadReviews(openName) {
   rv.list = j.reviews; rv.reports = j.reports; $("#rv-dir").textContent = j.dir;
   $("#rv-keep").textContent = j.keep_days ? `Reviews older than ${j.keep_days} days are deleted after each new one.` : "Kept until you delete them (or start serve with --keep-days).";
   if (!$("#rv-day").value) $("#rv-day").value = j.today;
-  const picked = $("#rv-run").value;
-  $("#rv-run").innerHTML = j.reports.length ? j.reports.map((r) => `<option value="${esc(r.id)}">${esc(r.project)} · ${esc(r.name)}${r.harness ? " · " + esc(r.harness) : ""}</option>`).join("")
-    : `<option value="">No run reports (start serve with --reports)</option>`;
-  if (j.reports.some((r) => r.id === picked)) $("#rv-run").value = picked;
+  const days = [...new Set(j.reports.map(runDay).filter(Boolean))].sort().reverse(), day = $("#rv-rday").value;
+  $("#rv-rday").innerHTML = `<option value="">All days</option>` + days.map((d) => `<option value="${d}">${d}</option>`).join("");
+  if (days.includes(day)) $("#rv-rday").value = day;
+  runOptions();
   reviewList();
   const name = [openName, rv.open].find((n) => n && rv.list.some((r) => r.name === n)) || (rv.list[0] || {}).name;
   if (name) openReview(name); else { rv.open = null; $("#rv-view").innerHTML = ""; }
+}
+const runDay = (r) => (/^\d{4}-\d\d-\d\d/.exec(r.name) || [""])[0];
+function runOptions() {
+  const day = $("#rv-rday").value, picked = $("#rv-run").value;
+  const list = rv.reports.filter((r) => !day || runDay(r) === day);
+  $("#rv-run").innerHTML = list.length ? list.map((r) => `<option value="${esc(r.id)}">${esc(r.project)} · ${esc(r.name)}${r.harness ? " · " + esc(r.harness) : ""}</option>`).join("")
+    : `<option value="">No run reports (start serve with --reports)</option>`;
+  if (list.some((r) => r.id === picked)) $("#rv-run").value = picked;
 }
 function reviewList() {
   $("#rv-list").innerHTML = rv.list && rv.list.length ? rv.list.map((r) => {
@@ -602,7 +611,7 @@ async function deleteReviews(body, what) {
 }
 function scopeInputs() {
   const s = $("#rv-scope").value;
-  $("#rv-day-l").hidden = s !== "day"; $("#rv-run-l").hidden = s !== "run";
+  $("#rv-day-l").hidden = s !== "day"; $("#rv-run-l").hidden = $("#rv-rday-l").hidden = s !== "run";
   $("#rv-since-l").hidden = $("#rv-until-l").hidden = s !== "window";
 }
 async function runReview() {
@@ -670,6 +679,7 @@ function setHarness(h) {
 
 $("#run").onclick = run;
 $("#rv-scope").onchange = scopeInputs;
+$("#rv-rday").onchange = runOptions;
 // The window applies as soon as it changes; a specific day waits for a date.
 function syncWindow() {
   if (data && data.day) { $("#days").value = "day"; $("#day").value = data.day; }

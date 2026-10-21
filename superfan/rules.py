@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import re
+import subprocess
 from datetime import datetime, timedelta, timezone
 
 from .parse import scan
@@ -49,15 +50,30 @@ def _num(s: str) -> float | None:
         return None
 
 
+def _commit_time(repo: str, ref: str) -> datetime | None:
+    """Commit time of `ref` in `repo`, read-only; None when git or the commit isn't there."""
+    if not re.fullmatch(r"[0-9a-f]{4,40}", ref) or not os.path.isdir(os.path.join(repo, ".git")):
+        return None
+    try:
+        r = subprocess.run(["git", "-C", repo, "show", "-s", "--format=%cI", ref], capture_output=True, text=True, timeout=10)
+        return datetime.fromisoformat(r.stdout.strip()).replace(second=0) if r.returncode == 0 else None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
 def parse_run_report(path: str, tz: timezone) -> dict:
     with open(path, encoding="utf-8") as fh:
         text = fh.read()
     rep = {"path": os.path.basename(path), "problems": []}
-    m = re.search(r"^- Start: \S+ \((\d{4}-\d\d-\d\d \d\d:\d\d)\)", text, re.M)
-    n = re.search(r"^- End: \S+ \((\d{4}-\d\d-\d\d \d\d:\d\d)\)", text, re.M)
+    m = re.search(r"^- Start: (\S+) \((\d{4}-\d\d-\d\d \d\d:\d\d)\)", text, re.M)
+    n = re.search(r"^- End: (\S+) \((\d{4}-\d\d-\d\d \d\d:\d\d)\)", text, re.M)
     if m and n:
-        rep["start"] = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M").replace(tzinfo=tz)
-        rep["end"] = datetime.strptime(n.group(1), "%Y-%m-%d %H:%M").replace(tzinfo=tz) + timedelta(minutes=1)
+        # The commits carry their own UTC offset; the printed local time is only right in the
+        # offset the run had, which differs after a clock change or a trip.
+        repo = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(path))))
+        rep["start"] = _commit_time(repo, m.group(1)) or datetime.strptime(m.group(2), "%Y-%m-%d %H:%M").replace(tzinfo=tz)
+        rep["end"] = (_commit_time(repo, n.group(1)) or datetime.strptime(n.group(2), "%Y-%m-%d %H:%M").replace(tzinfo=tz)) \
+            + timedelta(minutes=1)
     t = re.search(r"^- Tokens: (\S+) — feature agents ([^,]*), orchestration (\S+)", text, re.M)
     if t:
         rep["tokens"] = {"total": _num(t.group(1)), "agents": _num(t.group(2)), "orchestration": _num(t.group(3))}
