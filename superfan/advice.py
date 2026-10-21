@@ -362,12 +362,15 @@ def ask_claude(prompt: str, model: str = "sonnet", timeout: int = 240) -> str:
     exe = shutil.which("claude")
     if not exe:
         raise RuntimeError("The `claude` command is not on PATH, so the question can't be asked from here.")
-    cmd = [exe, "-p", "--tools", "", "--no-session-persistence", "--output-format", "text"]
+    # --strict-mcp-config with no --mcp-config: none of your MCP servers start (it needs none, and their
+    # sign-in warnings would otherwise end up as the error)
+    cmd = [exe, "-p", "--tools", "", "--strict-mcp-config", "--no-session-persistence", "--output-format", "text"]
     if model:
         cmd += ["--model", model]
     r = subprocess.run(cmd, input=prompt, capture_output=True, text=True, timeout=timeout)
     if r.returncode != 0:
-        msg = (r.stderr or r.stdout or f"claude exited with {r.returncode}").strip()[:500]
+        lines = [l for l in (r.stdout + "\n" + r.stderr).splitlines() if l.strip() and not l.startswith("[mcp-sdk]")]
+        msg = "\n".join(lines).strip()[-500:] or f"claude exited with {r.returncode}"
         if "not logged in" in msg.lower():  # the desktop app has its own login; the CLI needs one too
             msg += " (the claude command line tool is logged out: run `claude auth login` in a terminal, then try again)"
         raise RuntimeError(msg)
