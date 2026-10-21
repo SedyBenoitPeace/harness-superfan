@@ -61,6 +61,7 @@ class Outputs(unittest.TestCase):
         self.assertEqual(by["view AGENTS.md"]["calls_after"], 2)
         self.assertIsNone(by["view AGENTS.md"]["carried_usd"])
         self.assertEqual(secs["kit scripts and gate"], 2)
+        self.assertEqual(by["git log"]["calls_after"], 1)  # older CLI: assistant messages count as calls
 
 
 class Advice(unittest.TestCase):
@@ -70,7 +71,7 @@ class Advice(unittest.TestCase):
         self.assertIn("The orchestrator is doing work its subagents could do", titles)
 
     def test_copilot_tips(self):
-        [s] = scan(copilot_root=os.path.join(FIX, "copilot"), since=SINCE, until=UNTIL)
+        [s] = [s for s in scan(copilot_root=os.path.join(FIX, "copilot"), since=SINCE, until=UNTIL) if s["project"] == "repo"]
         tips = {t["title"]: t for t in advise(s, [])}
         self.assertIn("harness-builder ran 1 of them", tips["Context compaction is eating tokens"]["evidence"])
         self.assertEqual(tips["Tool definitions fill the prompt"]["tokens"], (120000 - 9000) * 3)

@@ -56,7 +56,8 @@ class Copilot(unittest.TestCase):
     """Synthetic Copilot CLI session: orchestrator plus one subagent that compacts once."""
 
     def setUp(self):
-        [self.s] = scan(copilot_root=os.path.join(FIX, "copilot"), since=SINCE, until=UNTIL)
+        ss = {s["project"]: s for s in scan(copilot_root=os.path.join(FIX, "copilot"), since=SINCE, until=UNTIL)}
+        self.s, self.old = ss["repo"], ss["other"]
         self.by = {a["role"]: a for a in self.s["agents"]}
 
     def test_tokens_only(self):
@@ -81,6 +82,14 @@ class Copilot(unittest.TestCase):
         self.assertEqual(w["tool_def_tokens"], 120000)                    # from compaction_start
         self.assertEqual(self.by["orchestrator"]["tool_def_tokens"], 9000)  # from usage_checkpoint
         self.assertEqual(self.s["tools"], {"bash": 1, "task": 1, "view": 1, "edit": 1})
+
+    def test_older_cli_uses_shutdown_totals(self):
+        """No usage records: tokens are the last shutdown in the window minus the one before it."""
+        by = {a["role"]: a for a in self.old["agents"]}
+        self.assertEqual(by["orchestrator"]["tokens"]["total"], 60600)
+        self.assertEqual(by["orchestrator"]["model_calls"], 3)
+        self.assertEqual((by["worker"]["label"], by["worker"]["tokens"]["total"]), ("explorer", 40400))
+        self.assertEqual(self.old["compactions"], 1)
 
 
 if __name__ == "__main__":

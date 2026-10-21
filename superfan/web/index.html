@@ -165,7 +165,9 @@ input { font: inherit; color: var(--ink); background: var(--surface); border: 1p
         <option value="7" selected>Last 7 days</option>
         <option value="30">Last 30 days</option>
         <option value="90">Last 90 days</option>
+        <option value="day">A specific day…</option>
       </select>
+      <input type="date" id="day" aria-label="Day" hidden>
       <button class="primary" id="run">Run now</button>
     </div>
   </header>
@@ -587,7 +589,7 @@ function setTab(t) {
 function render() {
   if (!data) return;
   const s = data.sources, src = [s.claude && "Claude Code", s.codex && "Codex", s.copilot && "Copilot", s.reports && `${s.reports} report folder${s.reports > 1 ? "s" : ""}`].filter(Boolean).join(", ");
-  $("#meta").textContent = `${new Date(data.since).toLocaleDateString()} to ${new Date(data.until).toLocaleDateString()} · read ${src || "nothing"} in ${data.seconds}s · ran ${new Date(data.ran_at).toLocaleTimeString()}` +
+  $("#meta").textContent = `${data.day ? new Date(data.day + "T12:00").toLocaleDateString([], { weekday: "long", day: "numeric", month: "long", year: "numeric" }) : new Date(data.since).toLocaleDateString() + " to " + new Date(data.until).toLocaleDateString()} · read ${src || "nothing"} in ${data.seconds}s · ran ${new Date(data.ran_at).toLocaleTimeString()}` +
     (data.missing.length ? ` · not found: ${data.missing.join(", ")}` : "");
   tiles(); sessions(); askAll(); breakdowns(); rules();
 }
@@ -600,7 +602,9 @@ async function post(url, body) {
 }
 async function run() {
   const btn = $("#run"); btn.disabled = true; btn.textContent = "Reading logs…"; $("#error").hidden = true;
-  try { data = await post("/api/run", { days: +$("#days").value }); detail.clear(); answers.clear(); render(); }
+  const sel = $("#days").value, body = sel === "day" ? { day: $("#day").value } : { days: +sel };
+  if (sel === "day" && !body.day) { btn.disabled = false; btn.textContent = "Run now"; $("#day").focus(); return; }
+  try { data = await post("/api/run", body); detail.clear(); answers.clear(); render(); }
   catch (e) { $("#error").hidden = false; $("#error").textContent = "Run failed: " + e.message; }
   btn.disabled = false; btn.textContent = "Run now";
 }
@@ -628,6 +632,17 @@ function setHarness(h) {
 
 $("#run").onclick = run;
 $("#rv-scope").onchange = scopeInputs;
+// The window applies as soon as it changes; a specific day waits for a date.
+function syncWindow() {
+  if (data && data.day) { $("#days").value = "day"; $("#day").value = data.day; }
+  else if (data) { const o = [...$("#days").options].find((x) => +x.value === data.days); if (o) $("#days").value = o.value; }
+  $("#day").hidden = $("#days").value !== "day";
+}
+$("#days").onchange = () => {
+  const d = $("#day"); d.hidden = $("#days").value !== "day";
+  if (d.hidden) run(); else { if (!d.value) d.value = new Date().toLocaleDateString("sv"); run(); }
+};
+$("#day").onchange = () => { if ($("#day").value) run(); };
 $("#harness").onclick = (e) => { const b = e.target.closest("button"); if (b) setHarness(b.dataset.h); };
 $("#tiles").onclick = (e) => { const b = e.target.closest(".tile"); if (!b) return; tile = tile === b.dataset.k ? null : b.dataset.k; tiles(); };
 document.addEventListener("click", (e) => {
@@ -659,7 +674,7 @@ document.addEventListener("mousemove", (e) => {
 });
 try { if (localStorage.getItem("superfan-tab") === "reviews") setTab("reviews"); } catch (e) {}
 fetch("/api/last").then((r) => r.json()).then((j) => {
-  if (j && j.sessions) { data = j; const o = [...$("#days").options].find((x) => +x.value === j.days); if (o) $("#days").value = o.value; render(); } else run();
+  if (j && j.sessions) { data = j; syncWindow(); render(); } else run();
 }).catch(() => {});
 </script>
 </body>

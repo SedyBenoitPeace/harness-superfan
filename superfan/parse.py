@@ -457,18 +457,39 @@ def _copilot_tokens(u: dict) -> dict:
             "output": u.get("outputTokens") or 0}
 
 
+def _copilot_snapshot(d: dict) -> dict:
+    """session.shutdown totals as {agent: {"name", "models": {model: (tokens, requests)}}}.
+    agentMetrics splits them by agent ("main" = orchestrator); older files only
+    have modelMetrics for the whole session."""
+    per_agent = d.get("agentMetrics") or {"main": {"modelMetrics": d.get("modelMetrics") or {}}}
+    out: dict = {}
+    for key, m in per_agent.items():
+        models = {}
+        for model, mm in ((m or {}).get("modelMetrics") or {}).items():
+            models[model] = (_copilot_tokens((mm or {}).get("usage") or {}),
+                             ((mm or {}).get("requests") or {}).get("count") or 0)
+        out[key] = {"name": (m or {}).get("agentName") or "", "models": models}
+    return out
+
+
 def scan_copilot(root: str, since=None, until=None) -> dict[str, Session]:
     """~/.copilot/session-state/<session>/events.jsonl, one file per session.
     Lines with an agentId belong to that subagent; the rest to the orchestrator.
     Tokens come from session.usage_record, plus the tokens each context
     compaction used (session.compaction_complete), which Copilot's own
-    subagent totals leave out. Tokens only: AI credits are never read."""
+    subagent totals leave out. Older CLIs (before ~1.0.9x) write no usage
+    records: their tokens come from the cumulative session.shutdown totals,
+    the last one in the window minus the last one before it.
+    Tokens only: AI credits are never read."""
     sessions: dict[str, Session] = {}
     for path in copilot_files(root, since):
         folder = os.path.dirname(path)
         sid = os.path.basename(folder)
         s = None
         names: dict = {}  # agentId -> agentName
+        has_records = False
+        compactions = []  # (agent, tokens, ts), added once we know where totals come from
+        before, last = None, None  # shutdown snapshots before and inside the window
         for r in iter_jsonl(path):
             if s is None:
                 sid = ((r.get("data") or {}).get("sessionId") or sid) if r.get("type") == "session.start" else sid
@@ -479,6 +500,14 @@ def scan_copilot(root: str, since=None, until=None) -> dict[str, Session]:
             if t == "subagent.started" and aid:
                 names[aid] = d.get("agentName") or d.get("agentDisplayName") or "subagent"
             ts = parse_ts(r.get("timestamp"))
+            if t == "session.usage_record":
+                has_records = True
+            if t == "session.shutdown":
+                if ts and since and ts < since:
+                    before = _copilot_snapshot(d)
+                elif in_window(ts, since, until):
+                    last = (ts, _copilot_snapshot(d))
+                continue
             if not in_window(ts, since, until):
                 continue
             a = s.agent(aid, "worker", names.get(aid, "")) if aid else s.agent("main", "orchestrator")
@@ -495,16 +524,12 @@ def scan_copilot(root: str, since=None, until=None) -> dict[str, Session]:
                 a.add_usage(model, sum(tk.values()))
                 a.see(ts)
             elif t == "session.compaction_complete":
-                u = d.get("compactionTokensUsed") or {}
-                tk = _copilot_tokens(u)
-                for k in TOKEN_KEYS:
-                    a.tokens[k] += tk[k]
+                tk = _copilot_tokens(d.get("compactionTokensUsed") or {})
                 a.compactions += 1
-                a.compaction_tokens += sum(tk.values())
-                a.add_usage("compaction", sum(tk.values()))
-                a.see(ts)
+                compactions.append((a, tk, ts))
             elif t == "session.compaction_start":
                 a.tool_def_tokens = max(a.tool_def_tokens, d.get("toolDefinitionsTokens") or 0)
+                a.max_context = max(a.max_context, d.get("currentTokens") or 0) if not has_records else a.max_context
             elif t == "session.usage_checkpoint":
                 st_all = d.get("promptCacheBreakState") or []
                 for st in (st_all.values() if isinstance(st_all, dict) else st_all):
@@ -512,6 +537,32 @@ def scan_copilot(root: str, since=None, until=None) -> dict[str, Session]:
                         a.tool_def_tokens = max(a.tool_def_tokens, (m or {}).get("tool_tokens") or 0)
             elif t == "tool.execution_start":
                 a.add_tool(d.get("toolName") or "?")
+                a.see(ts)
+        if s is None:
+            continue
+        from_snapshots = not has_records and last is not None
+        for a, tk, ts in compactions:
+            a.compaction_tokens += sum(tk.values())
+            if not from_snapshots:  # shutdown totals already hold them
+                for k in TOKEN_KEYS:
+                    a.tokens[k] += tk[k]
+                a.add_usage("compaction", sum(tk.values()))
+                a.see(ts)
+        if from_snapshots:
+            ts, snap = last
+            for key, cur in snap.items():
+                prev = (before or {}).get(key, {"models": {}})["models"]
+                a = s.agent("main", "orchestrator") if key == "main" else s.agent(key, "worker", cur["name"] or names.get(key, ""))
+                for model, (tk, n) in cur["models"].items():
+                    ptk, pn = prev.get(model, ({k: 0 for k in TOKEN_KEYS}, 0))
+                    delta = {k: max(tk[k] - ptk[k], 0) for k in TOKEN_KEYS}
+                    if not any(delta.values()):
+                        continue
+                    for k in TOKEN_KEYS:
+                        a.tokens[k] += delta[k]
+                    a.model_calls += max(n - pn, 0)
+                    a.models.add(model)
+                    a.add_usage(model, sum(delta.values()))
                 a.see(ts)
     return sessions
 

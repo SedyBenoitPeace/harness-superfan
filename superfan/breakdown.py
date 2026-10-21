@@ -328,7 +328,8 @@ def claude_outputs(root: str, prices: Prices | None = None, since=None, until=No
 def copilot_outputs(root: str, since=None, until=None, categories=None) -> tuple[list, dict]:
     """Same records for ~/.copilot/session-state. Each agent (orchestrator, or a
     subagent by agentId) is its own thread; its model calls are its
-    session.usage_record lines. Run time is tool start to tool complete."""
+    session.usage_record lines (older CLIs without them: its assistant.message
+    lines). Run time is tool start to tool complete."""
     out: list = []
     seconds: dict = {}
     for path in copilot_files(root, since):
@@ -336,6 +337,7 @@ def copilot_outputs(root: str, since=None, until=None, categories=None) -> tuple
         sid, project = os.path.basename(folder), None
         threads: dict = {}
         names: dict = {}
+        has_records = False
         for r in iter_jsonl(path):
             t, d, aid = r.get("type") or "", r.get("data") or {}, r.get("agentId")
             if project is None:
@@ -349,7 +351,10 @@ def copilot_outputs(root: str, since=None, until=None, categories=None) -> tuple
                 continue
             th = threads.setdefault(aid or "main", {"events": [], "calls": {}})
             if t == "session.usage_record":
+                has_records = True
                 th["events"].append(("call",))
+            elif t == "assistant.message":
+                th["events"].append(("msg",))
             elif t == "tool.execution_start":
                 name, body = d.get("toolName") or "?", d.get("arguments") or {}
                 cat = classify(name, body, categories)
@@ -361,13 +366,14 @@ def copilot_outputs(root: str, since=None, until=None, categories=None) -> tuple
                 res = d.get("result")
                 text = _text(res.get("content") if isinstance(res, dict) else res) or _text(d.get("error"))
                 th["events"].append(("out", cat, len(text) // 4, label, name, sample))
+        call = "call" if has_records else "msg"
         for key, th in threads.items():
-            n_calls = sum(1 for e in th["events"] if e[0] == "call")
+            n_calls = sum(1 for e in th["events"] if e[0] == call)
             role = "orchestrator" if key == "main" else "worker"
             seen = 0
             for e in th["events"]:
-                if e[0] == "call":
-                    seen += 1
+                if e[0] in ("call", "msg"):
+                    seen += e[0] == call
                     continue
                 _, cat, tok, label, name, sample = e
                 after = n_calls - seen

@@ -151,11 +151,19 @@ def make_handler(cfg: dict):
                     days = min(max(float(body.get("days", 7)), 0.1), 90)
                 except (TypeError, ValueError):
                     days = 7.0
+                day, until = body.get("day"), None
+                if day:  # one calendar day in local time
+                    try:
+                        _, until = review.day_window(datetime.strptime(str(day), "%Y-%m-%d").date(), cfg["tz"])
+                    except ValueError:
+                        return self._json(400, {"error": "Dates must look like 2026-10-16."})
+                    days = 1.0
                 with state["lock"]:
                     try:
-                        state["last"], state["outputs"] = run_once(cfg, days)
+                        state["last"], state["outputs"] = run_once(cfg, days, until)
                     except Exception as e:  # show the error on the page instead of a dead request
                         return self._json(500, {"error": repr(e)})
+                    state["last"]["day"] = str(day) if day else None
                 return self._json(200, state["last"])
             if url.path == "/api/review":
                 # The same review as `superfan review`: numbers computed here, summary by a model, saved to disk.

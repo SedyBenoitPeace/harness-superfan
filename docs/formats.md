@@ -64,7 +64,7 @@ Gotchas:
   (`superfan/prices.json`; API list prices, so on a subscription this is the
   API-equivalent value, not a bill).
 
-## GitHub Copilot CLI (1.0.9x) — `~/.copilot/session-state/<session id>/events.jsonl` (**tool results unconfirmed**)
+## GitHub Copilot CLI (1.0.75–1.0.9x) — `~/.copilot/session-state/<session id>/events.jsonl`
 
 One folder per session: `events.jsonl` plus `workspace.yaml` (`cwd`, `git_root`,
 `repository`, `branch`; the project name is the folder of `git_root`). Every
@@ -80,7 +80,9 @@ subagent's lines (absent = orchestrator).
 | `session.compaction_complete` | `compactionTokensUsed` {`inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`} |
 | `session.usage_checkpoint` | `promptCacheBreakState[].models.*.tool_tokens` (orchestrator only) |
 | `tool.execution_start` / `tool.execution_complete` | `toolCallId`, `toolName` (MCP tools are `<server>-<tool>`), `arguments`; `result.content` is what the model saw |
-| `user.message`, `assistant.message`, `system.message`, `summaryContent` | prompts and transcripts; never read |
+| `session.shutdown` | cumulative totals so far (a resumed session writes one per exit): `agentMetrics` {`main` or agent id: `agentName`, `modelMetrics`{model: `usage`, `requests.count`}}, or only `modelMetrics` |
+| `assistant.message` | `outputTokens`; one per model response (the content is never read) |
+| `user.message`, `system.message`, `model.messages_snapshot`, `summaryContent` | prompts and transcripts; never read |
 
 Gotchas:
 
@@ -88,6 +90,12 @@ Gotchas:
 - Compaction is a separate model call that `subagent.completed totalTokens`
   leaves out. The parser adds it to the agent's tokens and also reports it
   as `compaction_tokens` (and as model `compaction` in `by_model`).
+- CLIs before about 1.0.9x write **no** `session.usage_record`. For those files
+  the tokens come from `session.shutdown`: the last snapshot in the window minus
+  the last one before it, split by `agentMetrics`. Compaction tokens are then
+  assumed to be inside those totals (unconfirmed) and are not added again, and
+  "largest prompt" is Copilot's own estimate from `compaction_start`.
+  The breakdown counts each `assistant.message` as a model call there.
 - Copilot's local size estimates (`compaction_start`) run about 1.4x under the
   billed `inputTokens`; the parser only uses them for the tool-definition size.
 - `copilotUsage.totalNanoAiu` (AI credits) is a price unit; it is never read.
