@@ -134,6 +134,8 @@ systemd timer running the same command does the same job.
 | R1 orchestrator share | orchestrator plus approval reviewers take more than X% of a session with subagents | 40%, sessions over 1M tokens |
 | R2 report matches logs | a kit run report has negative or blank numbers, an `unknown` model, or totals more than 10% away from the logs for the same window | 10% |
 | R3 large tool output | one tool output is at least N tokens, so every later call in that thread pays for it again | 8,000 tokens |
+| R4 frequent compaction | one agent compacts its context N times or more (Copilot logs this; Claude Code and Codex never fire) | 5 compactions |
+| R5 tool definitions | one agent sends N tokens or more of tool schemas with every call, usually because it loads every tool up front instead of searching for the ones it needs (Copilot) | 50,000 tokens |
 
 Each finding names the session, the agent, the tokens and why it matters.
 

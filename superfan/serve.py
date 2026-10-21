@@ -34,6 +34,7 @@ def run_once(cfg: dict, days: float, until: datetime | None = None) -> tuple[dic
     sessions = scan(cfg["claude"], cfg["codex"], cfg["prices"], since, until, cfg.get("copilot"))
     sessions.sort(key=lambda r: -r["tokens"]["total"])
     findings = rules.orchestrator_share(sessions, cfg["orchestrator_limit"])
+    findings += rules.frequent_compaction(sessions) + rules.tool_definitions(sessions)
     findings += rules.report_vs_logs(cfg["reports"], cfg["codex"], cfg["claude"], cfg["prices"], cfg["tz"],
                                      copilot_root=cfg.get("copilot"))
     missing = [k for k in ("claude", "codex", "copilot") if cfg.get(k) and not os.path.isdir(cfg[k])]

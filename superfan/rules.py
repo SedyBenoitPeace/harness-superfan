@@ -127,3 +127,56 @@ def large_outputs(breakdown_events: list, limit: int = 8000) -> list:
                         "evidence": f"{script} printed ~{tok:,} tokens, re-read by {after} later calls",
                         "why": "output that size is near the CLI's truncation cap and is paid for on every following call"})
     return out
+
+
+def _who(a: dict) -> str:
+    role = {"orchestrator": "orchestrator", "worker": "subagent", "reviewer": "approval reviewer"}.get(a["role"], a["role"])
+    return f"{role} {a['label']}".strip() if a.get("label") else role
+
+
+# R4 ------------------------------------------------------------------------
+
+def frequent_compaction(sessions: list, limit: int = 5) -> list:
+    """An agent that compacts its context again and again is working in a
+    window that is too full (logged by Copilot; other harnesses report 0)."""
+    out = []
+    for s in sessions:
+        for a in s["agents"]:
+            n = a.get("compactions") or 0
+            if n < limit:
+                continue
+            out.append({
+                "rule": "R4 frequent compaction",
+                "harness": s["harness"], "session": s["session_id"], "project": s["project"],
+                "agent": _who(a), "tokens": a.get("compaction_tokens") or 0,
+                "evidence": f"{_who(a)} compacted {n} time{'' if n == 1 else 's'} over {a['model_calls']} calls, using "
+                            f"{a.get('compaction_tokens') or 0:,} tokens; largest prompt {a['max_context']:,} tokens",
+                "why": "each compaction re-reads the whole context to summarise it, and the agent loses detail "
+                       "every time; it usually means the prompt is mostly fixed overhead",
+            })
+    return out
+
+
+# R5 ------------------------------------------------------------------------
+
+def tool_definitions(sessions: list, limit: int = 50_000) -> list:
+    """Tool schemas are sent with every call. An agent carrying this many
+    tokens of them loads every tool up front instead of searching for the few
+    it uses (logged by Copilot; other harnesses report 0)."""
+    out = []
+    for s in sessions:
+        for a in s["agents"]:
+            per = a.get("tool_def_tokens") or 0
+            if per < limit:
+                continue
+            out.append({
+                "rule": "R5 tool definitions",
+                "harness": s["harness"], "session": s["session_id"], "project": s["project"],
+                "agent": _who(a), "tokens": per * a["model_calls"],
+                "evidence": f"{_who(a)} sent ~{per:,} tokens of tool definitions with each of {a['model_calls']} calls "
+                            f"(~{per * a['model_calls']:,} in total)",
+                "why": "schemas for tools the agent never calls fill the window, which drives compaction; "
+                       "deferred tool loading sends only the tools it searches for",
+            })
+    return out
+

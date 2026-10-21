@@ -106,6 +106,7 @@ def build(cfg: dict, scope: str, since: datetime, until: datetime, report: str |
     for o in outs:
         per_session.setdefault(o["session"], []).append(o)
     findings = rules.orchestrator_share(sessions, cfg["orchestrator_limit"])
+    findings += rules.frequent_compaction(sessions) + rules.tool_definitions(sessions)
     findings += rules.large_outputs([(o["session"], o["agent"], o["label"], o["tokens"], o["calls_after"]) for o in outs],
                                     cfg["output_limit"])
     r2 = rules.check_report(report, cfg["codex"], cfg["claude"], cfg["prices"], cfg["tz"], copilot_root=cfg.get("copilot")) if report else []

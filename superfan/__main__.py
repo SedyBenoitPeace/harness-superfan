@@ -93,6 +93,7 @@ def cmd_check(a: argparse.Namespace) -> int:
         prices = json.load(fh)
     sessions = scan(a.claude, a.codex, prices, since, until, a.copilot)
     findings = rules.orchestrator_share(sessions, a.orchestrator_limit)
+    findings += rules.frequent_compaction(sessions) + rules.tool_definitions(sessions)
     findings += rules.report_vs_logs(a.reports or [], a.codex, a.claude, prices, _tz(a.tz), copilot_root=a.copilot)
     findings += rules.large_outputs(_outputs(a, prices, since, until), a.output_limit)
     print(json.dumps(findings, indent=1, default=str))
@@ -123,6 +124,7 @@ def cmd_report(a: argparse.Namespace) -> int:
               f"{r['session_id'][:8]}  {fmt_dur(r['active_s'])} active, {r['model_calls']} calls, "
               f"orchestration {r['orchestration_share']:.0%}, {r['subagents']} subagents")
     findings = rules.orchestrator_share(rows, a.orchestrator_limit)
+    findings += rules.frequent_compaction(rows) + rules.tool_definitions(rows)
     findings += rules.report_vs_logs(a.reports or [], a.codex, a.claude, prices, _tz(a.tz), copilot_root=a.copilot)
     findings += rules.large_outputs(_outputs(a, prices, since, until), a.output_limit)
     print("\nHealth rules:")

@@ -292,7 +292,7 @@ function tiles() {
     ["tokens", "Tokens", tok(tot), tot ? pct(sum(ss, (s) => s.tokens.cache_read) / tot) + " cache reads" : ""],
     ["spend", "Claude Code spend", unpriced(harness) || !data.sources.claude ? "—" : usd(cost), spendNote],
     ["orch", "Orchestration share", tot ? pct(orch / tot) : "—", "orchestrator + approval reviewers"],
-    ["rules", "Health rules fired", `${fired} of 3`, `${fs.length} findings`],
+    ["rules", "Health rules fired", `${fired} of 5`, `${fs.length} findings`],
   ];
   $("#tiles").innerHTML = t.map(([k, l, v, n]) => `<button class="tile" data-k="${k}" aria-expanded="${tile === k}"><span class="chev">${tile === k ? "Hide ▲" : "Details ▼"}</span>
     <div class="label">${l}</div><div class="value">${esc(v)}</div><div class="note">${esc(n)}</div></button>`).join("");
@@ -501,6 +501,8 @@ function rules() {
     ["R1 orchestrator share", `Orchestrator above ${pct(data.thresholds.orchestrator)} of a session`, "Every orchestrator call re-sends its whole context; coordination builds nothing."],
     ["R2 report matches logs", "Run report disagrees with the logs", "Budgets and model choices are tuned from these numbers."],
     ["R3 large tool output", `Tool output of ${tok(data.thresholds.output)} tokens or more`, "It is paid for again on every later call in that thread."],
+    ["R4 frequent compaction", "An agent compacts its context 5 times or more", "Each compaction re-reads the whole context; a window this full is mostly fixed overhead."],
+    ["R5 tool definitions", "An agent sends 50k+ tokens of tool schemas per call", "Tools it never calls are paid for on every call and push it into compaction."],
   ];
   $("#rules").innerHTML = defs.map(([id, title, why]) => {
     const fs = fsAll.filter((f) => f.rule === id).sort((a, b) => (b.carried || b.tokens || 0) - (a.carried || a.tokens || 0));
