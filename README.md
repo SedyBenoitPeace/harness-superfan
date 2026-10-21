@@ -64,6 +64,11 @@ applies to the whole page:
 - Under All, sessions grouped by project with per-harness numbers; under one
   harness, a flat list. Click a session for its agents, where its tokens went,
   its largest tool outputs and **What to improve** (rule-based suggestions).
+  Click a kind of work (reading files, git...) for the files and commands
+  behind it: which agents ran them, how often the same agent re-read a file,
+  the largest output, tokens carried and a **Try:** hint for each. Click a
+  large output for the full command and its hint. Paths are shortened to
+  their last two parts.
 - **Ask Claude** on a session runs `claude -p` with every tool off and no
   saved session; **Ask ChatGPT** runs `codex exec` (your Codex login) in a
   read-only sandbox from an empty temporary folder, with `--ephemeral` when

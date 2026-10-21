@@ -16,6 +16,8 @@ import subprocess
 import tempfile
 from collections import Counter
 
+from .drill import drill, output_hint, short_paths
+
 ROLE = {"orchestrator": "orchestrator", "worker": "subagent", "reviewer": "approval reviewer"}
 
 
@@ -221,11 +223,15 @@ def session_detail(s: dict, outputs: list, orchestrator_limit: float, output_lim
         c["calls"] += 1
         c["carried_tokens"] += o["carried"]
         c["output_tokens"] += o["tokens"]
+    for k, d in drill(outputs).items():
+        cats[k].update(d)
     top = sorted(outputs, key=lambda o: -o["carried"])[:15]
     return {
         "categories": dict(sorted(cats.items(), key=lambda kv: -kv[1]["carried_tokens"])),
-        "largest": [{k: o[k] for k in ("agent", "role", "category", "label", "sample", "tokens", "calls_after", "carried",
-                                       "carried_usd")} for o in top],
+        "largest": [{**{k: o[k] for k in ("agent", "role", "category", "label", "tokens", "calls_after", "carried",
+                                          "carried_usd")},
+                     "label": short_paths(o["label"]), "sample": short_paths(o["sample"]), "hint": output_hint(o)}
+                    for o in top],
         "advice": advise(s, outputs, orchestrator_limit, output_limit),
     }
 
@@ -240,7 +246,10 @@ def ask_prompt(s: dict, detail: dict, question: str) -> str:
         brief["compaction_tokens"] = s.get("compaction_tokens") or 0
         for row, a in zip(brief["agents"], s["agents"]):
             row.update({k: a.get(k) or 0 for k in ("compactions", "compaction_tokens", "tool_def_tokens")})
-    brief["where_tokens_went"] = detail["categories"]
+    brief["where_tokens_went"] = {k: {**{f: v[f] for f in ("calls", "output_tokens", "carried_tokens")},
+                                      "top": [{f: i[f] for f in ("what", "calls", "re_reads", "max_output", "carried_tokens")}
+                                              for i in v.get("items", [])[:3]]}
+                                  for k, v in detail["categories"].items()}
     brief["largest_outputs"] = [{k: o[k] for k in ("agent", "category", "label", "tokens", "calls_after", "carried")}
                                 for o in detail["largest"]]
     brief["rule_based_suggestions"] = [{k: t[k] for k in ("title", "evidence")} for t in detail["advice"]]

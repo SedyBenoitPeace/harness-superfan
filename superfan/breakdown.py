@@ -389,6 +389,7 @@ def copilot_outputs(root: str, since=None, until=None, categories=None) -> tuple
 def summarise(outs: list, seconds: dict | None = None) -> dict:
     """Group output records by category, with drill-downs: by role, by label
     (command, script or file), by session, and the single largest outputs."""
+    from .drill import short_paths  # drill builds on this module
     seconds = seconds or {}
     cats: dict = {}
     by_session: dict = {}
@@ -402,7 +403,8 @@ def summarise(outs: list, seconds: dict | None = None) -> dict:
             c["carried_usd"] = (c["carried_usd"] or 0) + o["carried_usd"]
         c["by_role"][o["role"]] = c["by_role"].get(o["role"], 0) + o["carried"]
         lb = c["labels"].setdefault(o["label"], {"label": o["label"], "calls": 0, "output_tokens": 0, "carried_tokens": 0,
-                                                 "max_output": 0, "carried_usd": None, "sample": o["sample"]})
+                                                 "max_output": 0, "carried_usd": None,
+                                                 "sample": short_paths(o["sample"])})
         lb["calls"] += 1
         lb["output_tokens"] += o["tokens"]
         lb["carried_tokens"] += o["carried"]
@@ -419,8 +421,8 @@ def summarise(outs: list, seconds: dict | None = None) -> dict:
     for c in cats.values():
         c["labels"] = sorted(c["labels"].values(), key=lambda x: -x["carried_tokens"])[:TOP_N]
         c["sessions"] = sorted(c["sessions"].values(), key=lambda x: -x["carried_tokens"])[:TOP_N]
-        c["largest"] = [{k: o[k] for k in ("session", "project", "agent", "label", "sample", "tokens", "calls_after",
-                                           "carried", "carried_usd")}
+        c["largest"] = [{**{k: o[k] for k in ("session", "project", "agent", "label", "tokens", "calls_after",
+                                              "carried", "carried_usd")}, "sample": short_paths(o["sample"])}
                         for o in sorted(c["largest"], key=lambda o: -o["carried"])[:TOP_N]]
         if c["carried_usd"] is not None:
             c["carried_usd"] = round(c["carried_usd"], 4)

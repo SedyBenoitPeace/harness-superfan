@@ -99,6 +99,14 @@ tr.child > td:first-child { padding-left: 22px; }
 .bar.cc { background: var(--h-cc); } .bar.cx { background: var(--h-cx); } .bar.gh { background: var(--h-gh); }
 .minibars { display: grid; grid-template-columns: minmax(120px, 240px) 1fr 80px; gap: 5px 10px; align-items: center; font-size: 13px; }
 .minibars .bar { height: 10px; }
+.minibars > .mr { display: contents; cursor: pointer; }
+.minibars > .mr:hover > div { background: var(--hover); }
+.minibars > .mx { grid-column: 1 / -1; background: var(--page); border: 1px solid var(--ring); border-radius: 8px; padding: 10px 12px; margin: 2px 0 8px; min-width: 0; }
+.mx table { font-size: 12px; }
+tr.hint > td { border-top: 0; padding-top: 0; color: var(--ink-2); font-size: 12px; }
+tr.has-hint > td { border-bottom: 0; }
+.try { color: var(--serious); font-weight: 600; }
+.wrap { white-space: pre-wrap; overflow-wrap: anywhere; }
 .stack { display: flex; gap: 2px; height: 14px; }
 .stack span { height: 100%; }
 .stack span:first-child { border-radius: 3px 0 0 3px; } .stack span:last-child { border-radius: 0 3px 3px 0; } .stack span:only-child { border-radius: 3px; }
@@ -425,16 +433,42 @@ function sessionDetail(s) {
   const d = detail.get(s.session_id);
   if (!d) { loadDetail(s.session_id); return agents + `<p class="sub">Loading where the tokens went…</p>`; }
   if (d.error) return agents + `<p class="err">${esc(d.error)}</p>`;
-  const cats = Object.entries(d.categories);
-  const where = cats.length ? bars(cats.map(([k, v]) => [esc(k), v.carried_tokens, tok(v.carried_tokens), `${k}: ${v.calls} calls printed ${tok(v.output_tokens)}, carried ${tok(v.carried_tokens)}`]), HCLS[s.harness]) : `<p class="sub">No tool outputs.</p>`;
-  const largest = d.largest.slice(0, 6).map((o) => `<tr><td>${esc(o.agent)}</td><td>${esc(o.label)}<div class="mono muted ellip" title="${esc(o.sample)}">${esc(o.sample)}</div></td>
-    <td class="num">${tok(o.tokens)} × ${o.calls_after}</td><td class="num">${tok(o.carried)}${o.carried_usd != null ? `<div class="muted">${usd(o.carried_usd)}</div>` : ""}</td></tr>`).join("");
+  const cats = Object.entries(d.categories), sid = s.session_id;
+  const cmax = Math.max(...cats.map(([, v]) => v.carried_tokens), 1e-9);
+  const where = cats.length ? `<div class="minibars">` + cats.map(([k, v]) => { const key = `c:${sid}:${k}`, isOpen = open.has(key);
+    return `<div class="mr" data-key="${esc(key)}"><div class="ellip"><span class="caret">${isOpen ? "▾" : "▸"}</span>${esc(k)}</div>
+      <div><div class="bar ${HCLS[s.harness]}" style="width:${(v.carried_tokens / cmax * 100).toFixed(1)}%" data-tip="${esc(k)}: ${v.calls} calls printed ${tok(v.output_tokens)}, carried ${tok(v.carried_tokens)}"></div></div>
+      <div class="num">${tok(v.carried_tokens)}</div></div>` + (isOpen ? `<div class="mx">${catDrill(s, v)}</div>` : ""); }).join("") + `</div>`
+    : `<p class="sub">No tool outputs.</p>`;
+  const largest = d.largest.slice(0, 6).map((o, i) => { const key = `o:${sid}:${i}`, isOpen = open.has(key);
+    return `<tr class="click" data-key="${esc(key)}"><td style="white-space:nowrap"><span class="caret">${isOpen ? "▾" : "▸"}</span>${esc(o.agent)}</td><td><div class="ellip" style="max-width:190px">${esc(o.label)}</div><div class="mono muted ellip" style="max-width:190px">${esc(o.sample)}</div></td>
+    <td class="num">${tok(o.tokens)} × ${o.calls_after}</td><td class="num">${tok(o.carried)}${o.carried_usd != null ? `<div class="muted">${usd(o.carried_usd)}</div>` : ""}</td></tr>` +
+    (isOpen ? `<tr class="detail"><td colspan="4" style="white-space:normal"><div class="mono wrap">${esc(o.sample || o.label)}</div>
+      <p class="sub" style="margin:6px 0 0">${esc(o.category)} · ${ROLE[o.role] || esc(o.agent)} · printed ~${tok(o.tokens)}, then re-sent with each of the ${o.calls_after} later calls in that agent's thread = ${tok(o.carried)}${o.carried_usd != null ? ` (≈ ${usd(o.carried_usd)})` : ""}.</p>
+      ${o.hint ? `<p class="sub" style="margin:6px 0 0"><span class="try">Try:</span> ${esc(o.hint)}</p>` : ""}</td></tr>` : ""); }).join("");
   const tips = d.advice.length ? `<div class="tips">` + d.advice.map((t) => `<div class="tip"><b>${esc(t.title)}</b><p>${esc(t.evidence)}</p><p><span>Why:</span> ${esc(t.why)}</p><p><span>Try:</span> ${esc(t.try)}</p></div>`).join("") + `</div>`
     : `<p class="sub">Nothing stands out in this session.</p>`;
   const ask = askBox(s.session_id, answers.get(s.session_id) || {}, "What can I improve in this session?");
-  return agents + `<div class="grid2" style="margin-top:14px"><div><h3>Where its tokens went</h3>${where}
-    <h3>Largest tool outputs</h3><div class="scroll"><table><thead><tr><th>Agent</th><th>Command or file</th><th class="num">Printed × later calls</th><th class="num">Carried</th></tr></thead><tbody>${largest}</tbody></table></div></div>
+  return agents + `<div class="grid2" style="margin-top:14px"><div><h3>Where its tokens went <span class="muted" style="font-weight:400">· click a row for files, agents and fixes</span></h3>${where}
+    <h3>Largest tool outputs <span class="muted" style="font-weight:400">· click for the full command</span></h3><div class="scroll"><table><thead><tr><th>Agent</th><th>Command or file</th><th class="num" data-tip="Printed tokens × later calls that re-sent it">Printed × calls</th><th class="num">Carried</th></tr></thead><tbody>${largest}</tbody></table></div></div>
     <div><h3>What to improve</h3>${tips}<h3>Ask about this session</h3>${ask}</div></div>`;
+}
+
+function catDrill(s, v) {
+  const t = v.carried_tokens || 1, cc = s.harness === "claude-code";
+  const roles = Object.entries(v.by_role || {}).filter(([, x]) => x > 0).sort((a, b) => b[1] - a[1]);
+  const who = (ags) => Object.entries(ags.reduce((m, a) => (m[a.role] = (m[a.role] || 0) + 1, m), {})).map(([r, n]) =>
+    `<span style="white-space:nowrap"><span class="dot" style="background:var(${RCOL[r]})"></span> ${ROLE[r] || esc(r)}${n > 1 ? ` ×${n}` : ""}</span>`).join(" ");
+  const rows = (v.items || []).map((it) => `<tr${it.hint ? ` class="has-hint"` : ""}><td><div class="mono ellip" style="max-width:240px" data-tip="${esc(it.sample)}">${esc(it.what)}</div></td>
+      <td data-tip="${esc(it.agents.map((a) => `${ROLE[a.role] || a.agent}: ${a.calls} call${a.calls === 1 ? "" : "s"}, carried ${tok(a.carried_tokens)}`).join(" · "))}">${who(it.agents)}</td>
+      <td class="num">${it.calls}${it.re_reads ? `<div class="muted">${it.re_reads} re-read${it.re_reads === 1 ? "" : "s"}</div>` : ""}</td>
+      <td class="num">${tok(it.max_output)}</td><td class="num">${tok(it.carried_tokens)}${cc && it.carried_usd != null ? `<div class="muted">${usd(it.carried_usd)}</div>` : ""}</td></tr>` +
+      (it.hint ? `<tr class="hint"><td colspan="5"><span class="try">Try:</span> ${esc(it.hint)}</td></tr>` : "")).join("");
+  return `<div class="sub" style="margin-bottom:6px">${v.calls} calls printed ${tok(v.output_tokens)}, carried into ${tok(v.carried_tokens)} of later prompts.</div>
+    ${roles.length > 1 ? `<div class="stack" style="margin-bottom:4px">${roles.map(([r, x]) => `<span style="flex:${x};background:var(${RCOL[r]})" data-tip="${ROLE[r]}: ${tok(x)}"></span>`).join("")}</div>` : ""}
+    <div class="legend" style="margin-bottom:8px">${roles.map(([r, x]) => `<span><i style="background:var(${RCOL[r]})"></i>${ROLE[r]}${r === "worker" ? "s" : ""} ${pct(x / t)}</span>`).join("")}</div>
+    <div class="scroll"><table><thead><tr><th>File or command</th><th>Who</th><th class="num">Calls</th><th class="num">Largest</th><th class="num">Carried</th></tr></thead><tbody>${rows}</tbody></table></div>
+    ${v.more_items ? `<div class="sub" style="margin-top:4px">and ${v.more_items} smaller ones.</div>` : ""}`;
 }
 
 async function loadDetail(sid) {
