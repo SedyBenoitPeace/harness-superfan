@@ -4,7 +4,7 @@ import os
 import unittest
 from datetime import datetime, timezone
 
-from superfan.breakdown import classify, _label, claude_outputs, codex_breakdown
+from superfan.breakdown import classify, _label, claude_outputs, codex_breakdown, copilot_outputs
 from superfan.parse import scan
 from superfan.advice import advise
 
@@ -51,12 +51,29 @@ class Outputs(unittest.TestCase):
         b = codex_breakdown(os.path.join(FIX, "codex"), SINCE, UNTIL)
         self.assertTrue(all(len(t) == 5 for t in b["outputs"]))
 
+    def test_copilot_outputs_follow_agents(self):
+        outs, secs = copilot_outputs(os.path.join(FIX, "copilot"), since=SINCE, until=UNTIL)
+        by = {o["label"]: o for o in outs}
+        self.assertEqual(by["scripts/status.sh"]["category"], "kit scripts and gate")
+        self.assertEqual(by["scripts/status.sh"]["tokens"], 1000)  # result.content, not detailedContent
+        self.assertEqual(by["scripts/status.sh"]["calls_after"], 2)  # orchestrator calls only
+        self.assertEqual(by["view AGENTS.md"]["agent"], "harness-builder")
+        self.assertEqual(by["view AGENTS.md"]["calls_after"], 2)
+        self.assertIsNone(by["view AGENTS.md"]["carried_usd"])
+        self.assertEqual(secs["kit scripts and gate"], 2)
+
 
 class Advice(unittest.TestCase):
     def test_orchestrator_tip(self):
         [s] = scan(codex_root=os.path.join(FIX, "codex"), since=SINCE, until=UNTIL)
         titles = [t["title"] for t in advise(s, [], orchestrator_limit=0.30)]
         self.assertIn("The orchestrator is doing work its subagents could do", titles)
+
+    def test_copilot_tips(self):
+        [s] = scan(copilot_root=os.path.join(FIX, "copilot"), since=SINCE, until=UNTIL)
+        tips = {t["title"]: t for t in advise(s, [])}
+        self.assertIn("harness-builder ran 1 of them", tips["Context compaction is eating tokens"]["evidence"])
+        self.assertEqual(tips["Tool definitions fill the prompt"]["tokens"], (120000 - 9000) * 3)
 
 
 if __name__ == "__main__":

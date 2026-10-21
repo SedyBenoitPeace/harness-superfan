@@ -19,7 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from .parse import scan, Prices
-from .breakdown import codex_outputs, claude_outputs, summarise
+from .breakdown import codex_outputs, claude_outputs, copilot_outputs, summarise
 from . import rules, advice, review
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -31,11 +31,12 @@ def run_once(cfg: dict, days: float, until: datetime | None = None) -> tuple[dic
     until = until or datetime.now(timezone.utc)
     since = until - timedelta(days=days)
     started = time.time()
-    sessions = scan(cfg["claude"], cfg["codex"], cfg["prices"], since, until)
+    sessions = scan(cfg["claude"], cfg["codex"], cfg["prices"], since, until, cfg.get("copilot"))
     sessions.sort(key=lambda r: -r["tokens"]["total"])
     findings = rules.orchestrator_share(sessions, cfg["orchestrator_limit"])
-    findings += rules.report_vs_logs(cfg["reports"], cfg["codex"], cfg["claude"], cfg["prices"], cfg["tz"])
-    missing = [k for k in ("claude", "codex") if cfg[k] and not os.path.isdir(cfg[k])]
+    findings += rules.report_vs_logs(cfg["reports"], cfg["codex"], cfg["claude"], cfg["prices"], cfg["tz"],
+                                     copilot_root=cfg.get("copilot"))
+    missing = [k for k in ("claude", "codex", "copilot") if cfg.get(k) and not os.path.isdir(cfg[k])]
     outs, breakdown = [], {}
     if cfg["codex"] and "codex" not in missing:
         o, secs = codex_outputs(cfg["codex"], since, until)
@@ -45,6 +46,10 @@ def run_once(cfg: dict, days: float, until: datetime | None = None) -> tuple[dic
         o, secs = claude_outputs(cfg["claude"], Prices(cfg["prices"]), since, until)
         outs += o
         breakdown["claude-code"] = summarise(o, secs)
+    if cfg.get("copilot") and "copilot" not in missing:
+        o, secs = copilot_outputs(cfg["copilot"], since, until)
+        outs += o
+        breakdown["copilot"] = summarise(o, secs)
     for b in breakdown.values():
         b.pop("by_session", None)
     findings += rules.large_outputs([(o["session"], o["agent"], o["label"], o["tokens"], o["calls_after"]) for o in outs],
@@ -57,6 +62,7 @@ def run_once(cfg: dict, days: float, until: datetime | None = None) -> tuple[dic
         "seconds": round(time.time() - started, 1), "days": days,
         "sources": {"claude": bool(cfg["claude"]) and "claude" not in missing,
                     "codex": bool(cfg["codex"]) and "codex" not in missing,
+                    "copilot": bool(cfg.get("copilot")) and "copilot" not in missing,
                     "reports": len([d for d in cfg["reports"] if os.path.isdir(d)])},
         "missing": missing,
         "thresholds": {"orchestrator": cfg["orchestrator_limit"], "output": cfg["output_limit"]},
@@ -199,7 +205,7 @@ def make_handler(cfg: dict):
                 if not sid:  # the whole window
                     if not state["last"]:
                         return self._json(404, {"error": "Nothing read yet. Press Run now."})
-                    h = body.get("harness") if body.get("harness") in ("claude-code", "codex") else "all"
+                    h = body.get("harness") if body.get("harness") in ("claude-code", "codex", "copilot") else "all"
                     prompt = advice.overview_prompt(state["last"], state["outputs"], h, question,
                                                     cfg["orchestrator_limit"], cfg["output_limit"])
                     try:
@@ -224,8 +230,8 @@ def make_handler(cfg: dict):
 def serve(cfg: dict) -> None:
     httpd = ThreadingHTTPServer(("127.0.0.1", cfg["port"]), make_handler(cfg))
     print(f"Harness Superfan on http://127.0.0.1:{cfg['port']}  (Ctrl+C to stop)")
-    for k in ("claude", "codex"):
-        print(f"  {k:<7} {cfg[k] or '(off)'}")
+    for k in ("claude", "codex", "copilot"):
+        print(f"  {k:<7} {cfg.get(k) or '(off)'}")
     for d in cfg["reports"]:
         print(f"  reports {d}")
     try:

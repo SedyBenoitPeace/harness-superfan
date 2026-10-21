@@ -4,15 +4,15 @@ Reads the session logs your coding agents leave on disk and tells you, per
 session, what it cost and where the tokens went: orchestrator versus each
 subagent, model, cache use, tool calls, time. Built to watch runs of the
 [Agent Harness Kit](https://github.com/SedyBenoitPeace/agent-harness-kit), but
-the parser works on any Claude Code or Codex session.
+the parser works on any Claude Code, Codex or GitHub Copilot CLI session.
 
 It only reads your logs and run reports. The one place it writes, and the
 only place it deletes, is its own reviews folder (see Reviews). Python 3.10+,
 standard library only. 
 ## Platforms
 
-Tested on macOS. The code is standard-library Python and Claude Code and
-Codex keep their logs in the same places on Linux, so it should work there,
+Tested on macOS. The code is standard-library Python and Claude Code,
+Codex and Copilot keep their logs in the same places on Linux, so it should work there,
 but that is untested. Windows is untested. Automatic reviews use launchd
 (macOS); on Linux use cron or a systemd timer.
 
@@ -20,7 +20,8 @@ but that is untested. Windows is untested. Automatic reviews use launchd
 
 ```sh
 # one JSON row per session for the last 7 days
-python3 -m superfan scan --claude ~/.claude/projects --codex ~/.codex/sessions --days 7 --out sessions.json
+python3 -m superfan scan --claude ~/.claude/projects --codex ~/.codex/sessions \
+  --copilot ~/.copilot/session-state --days 7 --out sessions.json
 
 # the 5 largest, as a Markdown table (--by cost for Claude Code dollars)
 python3 -m superfan top sessions.json --n 5
@@ -37,7 +38,7 @@ python3 -m superfan serve --reports ~/src/app/docs/runs
 ```
 
 Opens `http://127.0.0.1:8765` with a **Run now** button, a window picker
-(24 hours to 90 days) and a harness filter (All, Claude Code, Codex) that
+(24 hours to 90 days) and a harness filter (All, Claude Code, Codex, Copilot) that
 applies to the whole page:
 
 - Summary cards; click one for its detail (sessions per day, token mix and
@@ -60,8 +61,9 @@ applies to the whole page:
 - **Where tokens go**, one card per harness; click a kind of work for the
   commands and files behind it, the sessions, and the largest single outputs.
 
-It reads `~/.claude/projects` and `~/.codex/sessions` by default
-(`--claude ''` or `--codex ''` turns one off). It listens on 127.0.0.1 only,
+It reads `~/.claude/projects`, `~/.codex/sessions` and
+`~/.copilot/session-state` by default (`--claude ''`, `--codex ''` or
+`--copilot ''` turns one off). It listens on 127.0.0.1 only,
 refuses other Host headers, needs a custom header on anything that does work
 (so other websites can't trigger it), and keeps the last result in memory.
 The only files it writes are reviews. `python3 -m superfan report` prints the overview in the
@@ -72,7 +74,10 @@ Each session row has: `harness`, `project` (working folder name), `models`,
 `cost_usd` (Claude Code only; Codex and Copilot stay tokens only), `active_s`
 (time with no gap over 10 minutes) and `duration_s` (wall), `model_calls`,
 `tool_calls` and `tools`, `orchestration_share`, and `agents[]` with the same
-fields per orchestrator, subagent and approval reviewer.
+fields per orchestrator, subagent and approval reviewer. Copilot sessions
+also have `compactions`, `compaction_tokens` (tokens context compaction used;
+included in `tokens`) and, per agent, `tool_def_tokens` (the tool-definition
+block re-sent with every call).
 
 Dollars use `superfan/prices.json` (Anthropic API list prices). On a
 subscription that is the API-equivalent value, not your bill. Pass
@@ -134,7 +139,7 @@ Each finding names the session, the agent, the tokens and why it matters.
 
 ## Where tokens go
 
-`superfan.breakdown` (`codex_outputs`, `claude_outputs`, `summarise`) groups
+`superfan.breakdown` (`codex_outputs`, `claude_outputs`, `copilot_outputs`, `summarise`) groups
 tool calls by kind of work and estimates the tokens each kind keeps in
 context: output size times the model calls that follow it in the same
 thread. It is an estimate (characters / 4, no compaction). A call is grouped
@@ -156,12 +161,12 @@ Claude Code responses split over several lines with the same usage).
 python3 -m unittest discover tests
 ```
 
-Fixtures are synthetic. The Codex ones come from the Agent Harness Kit's test
+Fixtures are synthetic. The Copilot one is hand-made. The Codex ones come from the Agent Harness Kit's test
 data (MIT). Never commit a real session log, trimmed or not.
 
 ## Not yet
 
-Copilot CLI logs; Codex `.jsonl.zst` archives; R2 for Claude Code runs;
+Codex `.jsonl.zst` archives; R2 for Claude Code runs;
 Windows scheduling examples.
 
 ## License

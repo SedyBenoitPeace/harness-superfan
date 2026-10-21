@@ -157,13 +157,47 @@ def advise(s: dict, outputs: list, orchestrator_limit: float = 0.40, output_limi
         tips.append({
             "title": "A lot of generated text",
             "evidence": f"{_t(tok['output'])} output tokens, {tok['output'] / total:.0%} of the session"
-                        + (" (Codex counts reasoning here)." if not claude else "."),
+                        + (" (Codex counts reasoning here)." if s["harness"] == "codex" else "."),
             "why": "Output is the most expensive kind of token.",
             "try": "Lower the reasoning effort for routine steps and ask for shorter reports between agents.",
             "tokens": tok["output"] * 4,
         })
 
-    # 10. Approval reviewers
+    # 10. Context compaction (Copilot logs what each compaction used)
+    comp = s.get("compaction_tokens") or 0
+    if comp and comp / total >= 0.10:
+        worst = max(agents, key=lambda a: a.get("compaction_tokens") or 0)
+        who = worst["label"] or ROLE.get(worst["role"], worst["role"])
+        tips.append({
+            "title": "Context compaction is eating tokens",
+            "evidence": f"{s['compactions']} compaction{'s' if s['compactions'] != 1 else ''} used {_t(comp)} tokens ({comp / total:.0%} of the session); "
+                        f"{who} ran {worst['compactions']} of them for {_t(worst['compaction_tokens'])}.",
+            "why": "Each compaction re-reads the whole context to summarise it. When the prompt is mostly fixed "
+                   "context (tool definitions, instructions), it frees little and runs again a few calls later.",
+            "try": "Shrink the fixed context first (fewer tools for that agent, shorter instructions), give the agent "
+                   "a smaller task, or start a fresh agent per feature instead of compacting one long one.",
+            "tokens": comp,
+        })
+
+    # 11. Tool definitions taking the prompt (Copilot reports their size)
+    heavy_tools = [a for a in agents if (a.get("tool_def_tokens") or 0) >= 20_000 and a["max_context"]
+                   and a["tool_def_tokens"] / a["max_context"] >= 0.25]
+    if heavy_tools:
+        w = max(heavy_tools, key=lambda a: a["tool_def_tokens"] * a["model_calls"])
+        least = min((a["tool_def_tokens"] for a in agents if a.get("tool_def_tokens")), default=0)
+        tips.append({
+            "title": "Tool definitions fill the prompt",
+            "evidence": f"{w['label'] or ROLE.get(w['role'], w['role'])} carried {_t(w['tool_def_tokens'])} tokens of tool "
+                        f"definitions on each of {w['model_calls']} calls (largest prompt {_t(w['max_context'])})"
+                        + (f"; the lightest agent here carried {_t(least)}." if least < w["tool_def_tokens"] else "."),
+            "why": "Tool definitions are re-sent on every call and leave less room for the work, which brings "
+                   "compaction sooner.",
+            "try": "Give the agent an explicit tool allowlist (only the tools it uses), or turn off MCP servers it "
+                   "doesn't need.",
+            "tokens": (w["tool_def_tokens"] - least) * w["model_calls"],
+        })
+
+    # 12. Approval reviewers
     rev = sum(a["tokens"]["total"] for a in agents if a["role"] == "reviewer")
     if rev / total >= 0.10:
         tips.append({
@@ -202,6 +236,10 @@ def ask_prompt(s: dict, detail: dict, question: str) -> str:
                                "model_calls", "tool_calls", "tools", "orchestration_share", "subagents")}
     brief["agents"] = [{k: a[k] for k in ("role", "label", "models", "tokens", "share", "cost_usd", "model_calls",
                                           "tool_calls", "max_context")} for a in s["agents"]]
+    if s.get("compaction_tokens") or any(a.get("tool_def_tokens") for a in s["agents"]):
+        brief["compaction_tokens"] = s.get("compaction_tokens") or 0
+        for row, a in zip(brief["agents"], s["agents"]):
+            row.update({k: a.get(k) or 0 for k in ("compactions", "compaction_tokens", "tool_def_tokens")})
     brief["where_tokens_went"] = detail["categories"]
     brief["largest_outputs"] = [{k: o[k] for k in ("agent", "category", "label", "tokens", "calls_after", "carried")}
                                 for o in detail["largest"]]
@@ -212,7 +250,7 @@ def ask_prompt(s: dict, detail: dict, question: str) -> str:
         "output size x later model calls that re-read it), and rule-based suggestions already shown to the user.\n"
         "Do not run commands or read files: answer the user's question using only these numbers. Be concrete: name the agent, the command or file, "
         "and the tokens involved. Add what the rule-based suggestions missed rather than repeating them. Use short "
-        "Markdown: a few bullets, most valuable first. Codex sessions have no dollar prices; do not invent any.\n\n"
+        "Markdown: a few bullets, most valuable first. Codex and Copilot sessions have no dollar prices; do not invent any.\n\n"
         f"Question: {question}\n\nSession:\n```json\n{json.dumps(brief, indent=1, default=str)}\n```\n"
     )
 
@@ -240,6 +278,7 @@ def overview_prompt(result: dict, per_session: dict, harness: str, question: str
             "session": s["session_id"][:8], "harness": s["harness"], "project": s["project"], "start": s["start"],
             "models": s["models"], "tokens": s["tokens"], "cost_usd": s["cost_usd"], "active_s": s["active_s"],
             "model_calls": s["model_calls"], "orchestration_share": s["orchestration_share"], "subagents": s["subagents"],
+            **({"compaction_tokens": s["compaction_tokens"]} if s.get("compaction_tokens") else {}),
             "where_tokens_went": {k: v["carried_tokens"] for k, v in list(d["categories"].items())[:5]},
             "largest_outputs": [f"{o['label']} ({o['agent']}): {o['tokens']} x {o['calls_after']}" for o in d["largest"][:3]],
             "suggestions": [t["title"] for t in d["advice"]],
@@ -255,12 +294,12 @@ def overview_prompt(result: dict, per_session: dict, harness: str, question: str
              "sessions": rows, "sessions_not_detailed": max(len(ss) - top, 0),
              "where_tokens_went": breakdown, "health_rule_findings": findings}
     return (
-        "You review a developer's coding-agent sessions (Claude Code and/or Codex) for cost and efficiency. Below is "
+        "You review a developer's coding-agent sessions (Claude Code, Codex and/or GitHub Copilot CLI) for cost and efficiency. Below is "
         "a JSON summary of a time window: totals per harness, the largest sessions with per-session numbers, where "
         "tool-output tokens went (\"carried\" = output size x later model calls that re-read it) and rule findings.\n"
         "Do not run commands or read files: answer only from these numbers. Look for patterns across sessions and "
         "projects, name the sessions, projects, commands and token counts involved, and order points by how much "
-        "they would save. Use short Markdown. Codex has no dollar prices; do not invent any.\n\n"
+        "they would save. Use short Markdown. Codex and Copilot have no dollar prices; do not invent any.\n\n"
         f"Question: {question}\n\nData:\n```json\n{json.dumps(brief, indent=1, default=str)}\n```\n"
     )
 

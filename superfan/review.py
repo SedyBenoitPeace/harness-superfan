@@ -18,7 +18,7 @@ import re
 from datetime import date, datetime, time, timedelta, timezone
 
 from .parse import scan, Prices, parse_ts
-from .breakdown import codex_outputs, claude_outputs, summarise
+from .breakdown import codex_outputs, claude_outputs, copilot_outputs, summarise
 from . import rules, advice
 
 ENGINE_NAME = {"claude": "Claude", "codex": "ChatGPT"}
@@ -41,9 +41,11 @@ def day_window(d: date, tz) -> tuple[datetime, datetime]:
 def _totals(sessions: list) -> dict:
     out: dict = {}
     for s in sessions:
-        t = out.setdefault(s["harness"], {"sessions": 0, "tokens": 0, "orchestrator_tokens": 0, "cost_usd": None})
+        t = out.setdefault(s["harness"], {"sessions": 0, "tokens": 0, "orchestrator_tokens": 0, "cost_usd": None,
+                                          "compaction_tokens": 0})
         t["sessions"] += 1
         t["tokens"] += s["tokens"]["total"]
+        t["compaction_tokens"] += s.get("compaction_tokens") or 0
         t["orchestrator_tokens"] += sum(a["tokens"]["total"] for a in s["agents"] if a["role"] != "worker")
         if s["cost_usd"] is not None:
             t["cost_usd"] = round((t["cost_usd"] or 0) + s["cost_usd"], 2)
@@ -57,7 +59,7 @@ def _previous_days(cfg: dict, d: date, n: int) -> list:
     tz = cfg["tz"]
     since, _ = day_window(d - timedelta(days=n), tz)
     until, _ = day_window(d, tz)
-    sessions = scan(cfg["claude"], cfg["codex"], cfg["prices"], since, until)
+    sessions = scan(cfg["claude"], cfg["codex"], cfg["prices"], since, until, cfg.get("copilot"))
     days = []
     for i in range(n, 0, -1):
         day = d - timedelta(days=i)
@@ -85,7 +87,7 @@ def _problems(sessions: list, per_session: dict, cfg: dict, top: int = 3) -> lis
 def build(cfg: dict, scope: str, since: datetime, until: datetime, report: str | None = None,
           compare_days: int = 0) -> dict:
     """All the numbers for one review. `cfg` has the same keys as `serve`'s config."""
-    sessions = scan(cfg["claude"], cfg["codex"], cfg["prices"], since, until)
+    sessions = scan(cfg["claude"], cfg["codex"], cfg["prices"], since, until, cfg.get("copilot"))
     sessions.sort(key=lambda r: -r["tokens"]["total"])
     outs, breakdown = [], {}
     if cfg["codex"] and os.path.isdir(cfg["codex"]):
@@ -96,13 +98,17 @@ def build(cfg: dict, scope: str, since: datetime, until: datetime, report: str |
         o, secs = claude_outputs(cfg["claude"], Prices(cfg["prices"]), since, until)
         outs += o
         breakdown["claude-code"] = summarise(o, secs)
+    if cfg.get("copilot") and os.path.isdir(cfg["copilot"]):
+        o, secs = copilot_outputs(cfg["copilot"], since, until)
+        outs += o
+        breakdown["copilot"] = summarise(o, secs)
     per_session: dict = {}
     for o in outs:
         per_session.setdefault(o["session"], []).append(o)
     findings = rules.orchestrator_share(sessions, cfg["orchestrator_limit"])
     findings += rules.large_outputs([(o["session"], o["agent"], o["label"], o["tokens"], o["calls_after"]) for o in outs],
                                     cfg["output_limit"])
-    r2 = rules.check_report(report, cfg["codex"], cfg["claude"], cfg["prices"], cfg["tz"]) if report else []
+    r2 = rules.check_report(report, cfg["codex"], cfg["claude"], cfg["prices"], cfg["tz"], copilot_root=cfg.get("copilot")) if report else []
     data = {
         "scope": scope, "since": since.isoformat(), "until": until.isoformat(),
         "made_at": datetime.now(timezone.utc).isoformat(),
@@ -139,12 +145,12 @@ QUESTION = {
 
 def prompt(data: dict) -> str:
     return (
-        "You review a developer's coding-agent sessions (Claude Code and/or Codex) for cost and efficiency. Below is "
+        "You review a developer's coding-agent sessions (Claude Code, Codex and/or GitHub Copilot CLI) for cost and efficiency. Below is "
         "a JSON summary that a script computed from the session logs: totals per harness, the largest sessions, the "
         "biggest problems found by fixed rules, health-rule findings and where tool-output tokens went (\"carried\" = "
         "output size x later model calls that re-read it).\n"
         "Do not run commands or read files: answer only from these numbers, and do not recompute or invent any. "
-        "Name the sessions, commands and token counts involved. Codex has no dollar prices. Short Markdown, under "
+        "Name the sessions, commands and token counts involved. Codex and Copilot have no dollar prices; never convert their tokens or credits to money. Short Markdown, under "
         "250 words, no headline restating the totals (they are printed above your answer).\n\n"
         f"Task: {QUESTION.get(data['scope'], QUESTION['window'])}\n\nData:\n```json\n"
         f"{json.dumps(data, indent=1, default=str)}\n```\n"
@@ -153,7 +159,8 @@ def prompt(data: dict) -> str:
 
 def _harness_line(h: str, t: dict) -> str:
     money = f", ${t['cost_usd']:,.2f}" if h == "claude-code" and t["cost_usd"] is not None else ""
-    return f"- {h}: {t['sessions']} session{'' if t['sessions'] == 1 else 's'}, {_t(t['tokens'])} tokens{money}, orchestration {t['orchestration_share']:.0%}"
+    comp = f", compaction {_t(t['compaction_tokens'])}" if t.get("compaction_tokens") else ""
+    return f"- {h}: {t['sessions']} session{'' if t['sessions'] == 1 else 's'}, {_t(t['tokens'])} tokens{money}{comp}, orchestration {t['orchestration_share']:.0%}"
 
 
 def render(data: dict, summaries: dict) -> str:

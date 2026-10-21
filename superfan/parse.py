@@ -1,4 +1,4 @@
-"""Read Claude Code and Codex session logs and summarise each session.
+"""Read Claude Code, Codex and GitHub Copilot CLI session logs and summarise each session.
 
 Standard library only. Nothing here knows about a particular machine: log
 folders, the time window and the price table are all passed in.
@@ -8,7 +8,7 @@ Token fields are normalised the same way for every harness:
 
   input        fresh input tokens (not served from cache)
   cache_read   input tokens served from cache
-  cache_write  input tokens written to cache (Claude Code only; Codex reports 0)
+  cache_write  input tokens written to cache (Claude Code, Copilot; Codex reports 0)
   output       output tokens (Codex: includes reasoning tokens)
   total        input + cache_read + cache_write + output
 
@@ -71,6 +71,9 @@ class Agent:
     stamps: list = field(default_factory=list)
     by_model: dict = field(default_factory=dict)  # model -> {"calls", "tokens", "cost_usd"}
     cost_parts: dict = field(default_factory=lambda: {k: 0.0 for k in TOKEN_KEYS})
+    compactions: int = 0       # Copilot: context compactions this agent ran
+    compaction_tokens: int = 0  # Copilot: tokens those compactions used (already in `tokens`)
+    tool_def_tokens: int = 0    # Copilot: largest tool-definition block in its prompt
 
     def add_usage(self, model: str, tokens: int, parts: dict | None = None) -> None:
         m = self.by_model.setdefault(model or "?", {"calls": 0, "tokens": 0, "cost_usd": None})
@@ -151,6 +154,9 @@ class Session:
                 "max_context": a.max_context,
                 "duration_s": int((a.last - a.first).total_seconds()) if a.first and a.last else 0,
                 "active_s": active_seconds(a.stamps),
+                "compactions": a.compactions,
+                "compaction_tokens": a.compaction_tokens,
+                "tool_def_tokens": a.tool_def_tokens,
             })
         orch = sum(r["tokens"]["total"] for r in rows if r["role"] != "worker")
         return {
@@ -171,6 +177,8 @@ class Session:
             "cost_parts": {k: round(v, 4) for k, v in parts.items()} if priced else None,
             "orchestration_share": round(orch / tokens["total"], 4) if tokens["total"] else 0,
             "subagents": sum(1 for r in rows if r["role"] == "worker"),
+            "compactions": sum(a.compactions for a in agents),
+            "compaction_tokens": sum(a.compaction_tokens for a in agents),
             "agents": rows,
         }
 
@@ -412,13 +420,111 @@ def scan_codex(root: str, since=None, until=None) -> dict[str, Session]:
     return sessions
 
 
-def scan(claude_root=None, codex_root=None, prices_table=None, since=None, until=None) -> list[dict]:
+# -------------------------------------------------------------------- Copilot
+
+def copilot_workspace(folder: str) -> dict:
+    """workspace.yaml next to events.jsonl: flat `key: value` lines."""
+    out: dict = {}
+    try:
+        with open(os.path.join(folder, "workspace.yaml"), encoding="utf-8") as fh:
+            for line in fh:
+                k, sep, v = line.partition(":")
+                if sep and not line[:1].isspace():
+                    out[k.strip()] = v.strip().strip("'\"")
+    except OSError:
+        pass
+    return out
+
+
+def copilot_files(root: str, since: datetime | None) -> list[str]:
+    """<root>/<session uuid>/events.jsonl, or root itself when it is one session folder."""
+    return [p for p in files_touched_since(root, since) if os.path.basename(p) == "events.jsonl"]
+
+
+def copilot_project(folder: str, first: dict | None) -> str:
+    ws = copilot_workspace(folder)
+    ctx = ((first or {}).get("data") or {}).get("context") or {}
+    where = ws.get("git_root") or ws.get("cwd") or ctx.get("gitRoot") or ctx.get("cwd") or ""
+    return os.path.basename(where.rstrip("/")) or "?"
+
+
+def _copilot_tokens(u: dict) -> dict:
+    """inputTokens is the whole prompt, cache reads and writes included."""
+    total_in = u.get("inputTokens") or 0
+    read = u.get("cacheReadTokens") or 0
+    write = u.get("cacheWriteTokens") or 0
+    return {"input": max(total_in - read - write, 0), "cache_read": read, "cache_write": write,
+            "output": u.get("outputTokens") or 0}
+
+
+def scan_copilot(root: str, since=None, until=None) -> dict[str, Session]:
+    """~/.copilot/session-state/<session>/events.jsonl, one file per session.
+    Lines with an agentId belong to that subagent; the rest to the orchestrator.
+    Tokens come from session.usage_record, plus the tokens each context
+    compaction used (session.compaction_complete), which Copilot's own
+    subagent totals leave out. Tokens only: AI credits are never read."""
+    sessions: dict[str, Session] = {}
+    for path in copilot_files(root, since):
+        folder = os.path.dirname(path)
+        sid = os.path.basename(folder)
+        s = None
+        names: dict = {}  # agentId -> agentName
+        for r in iter_jsonl(path):
+            if s is None:
+                sid = ((r.get("data") or {}).get("sessionId") or sid) if r.get("type") == "session.start" else sid
+                s = sessions[sid] = Session("copilot", sid, copilot_project(folder, r))
+            t = r.get("type") or ""
+            d = r.get("data") or {}
+            aid = r.get("agentId")
+            if t == "subagent.started" and aid:
+                names[aid] = d.get("agentName") or d.get("agentDisplayName") or "subagent"
+            ts = parse_ts(r.get("timestamp"))
+            if not in_window(ts, since, until):
+                continue
+            a = s.agent(aid, "worker", names.get(aid, "")) if aid else s.agent("main", "orchestrator")
+            if t == "session.usage_record":
+                u = d.get("usage") or {}
+                tk = _copilot_tokens(u)
+                model = u.get("model") or ""
+                for k in TOKEN_KEYS:
+                    a.tokens[k] += tk[k]
+                a.model_calls += 1
+                a.max_context = max(a.max_context, u.get("inputTokens") or 0)
+                if model:
+                    a.models.add(model)
+                a.add_usage(model, sum(tk.values()))
+                a.see(ts)
+            elif t == "session.compaction_complete":
+                u = d.get("compactionTokensUsed") or {}
+                tk = _copilot_tokens(u)
+                for k in TOKEN_KEYS:
+                    a.tokens[k] += tk[k]
+                a.compactions += 1
+                a.compaction_tokens += sum(tk.values())
+                a.add_usage("compaction", sum(tk.values()))
+                a.see(ts)
+            elif t == "session.compaction_start":
+                a.tool_def_tokens = max(a.tool_def_tokens, d.get("toolDefinitionsTokens") or 0)
+            elif t == "session.usage_checkpoint":
+                st_all = d.get("promptCacheBreakState") or []
+                for st in (st_all.values() if isinstance(st_all, dict) else st_all):
+                    for m in ((st or {}).get("models") or {}).values():
+                        a.tool_def_tokens = max(a.tool_def_tokens, (m or {}).get("tool_tokens") or 0)
+            elif t == "tool.execution_start":
+                a.add_tool(d.get("toolName") or "?")
+                a.see(ts)
+    return sessions
+
+
+def scan(claude_root=None, codex_root=None, prices_table=None, since=None, until=None, copilot_root=None) -> list[dict]:
     prices = Prices(prices_table or {})
     out: list[dict] = []
     if claude_root:
         out += [s.summary() for s in scan_claude(claude_root, prices, since, until).values()]
     if codex_root:
         out += [s.summary() for s in scan_codex(codex_root, since, until).values()]
+    if copilot_root:
+        out += [s.summary() for s in scan_copilot(copilot_root, since, until).values()]
     out = [s for s in out if s["tokens"]["total"] > 0]
     if prices.unknown:
         for s in out:

@@ -10,7 +10,7 @@
   --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
   --grid: #e1e0d9; --axis: #c3c2b7; --ring: rgba(11,11,11,0.10); --hover: #f0efea;
   --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a;          /* roles: orchestrator, approval reviewer, subagents */
-  --h-cc: #6250d6; --h-cx: #eda100;                      /* harnesses: Claude Code, Codex */
+  --h-cc: #6250d6; --h-cx: #eda100; --h-gh: #c2418f;      /* harnesses: Claude Code, Codex, Copilot */
   --good: #0ca30c; --warning: #fab219; --serious: #ec835a; --critical: #d03b3b;
 }
 @media (prefers-color-scheme: dark) {
@@ -18,14 +18,14 @@
     color-scheme: dark;
     --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
     --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10); --hover: #222221;
-    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --h-cc: #9085e9; --h-cx: #c98500;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --h-cc: #9085e9; --h-cx: #c98500; --h-gh: #d65ba3;
   }
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
   --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
   --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10); --hover: #222221;
-  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --h-cc: #9085e9; --h-cx: #c98500;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --h-cc: #9085e9; --h-cx: #c98500; --h-gh: #d65ba3;
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--page); color: var(--ink);
@@ -96,7 +96,7 @@ tr.child > td:first-child { padding-left: 22px; }
 .bars > .r:hover > div { background: var(--hover); }
 .bars > .x { grid-column: 1 / -1; background: var(--page); border-radius: 8px; padding: 12px; margin: 4px 0 8px; }
 .bar { height: 14px; background: var(--s1); border-radius: 0 4px 4px 0; min-width: 2px; }
-.bar.cc { background: var(--h-cc); } .bar.cx { background: var(--h-cx); }
+.bar.cc { background: var(--h-cc); } .bar.cx { background: var(--h-cx); } .bar.gh { background: var(--h-gh); }
 .minibars { display: grid; grid-template-columns: minmax(120px, 240px) 1fr 80px; gap: 5px 10px; align-items: center; font-size: 13px; }
 .minibars .bar { height: 10px; }
 .stack { display: flex; gap: 2px; height: 14px; }
@@ -158,6 +158,7 @@ input { font: inherit; color: var(--ink); background: var(--surface); border: 1p
         <button data-h="all" aria-pressed="true">All</button>
         <button data-h="claude-code" aria-pressed="false">Claude Code</button>
         <button data-h="codex" aria-pressed="false">Codex</button>
+        <button data-h="copilot" aria-pressed="false">Copilot</button>
       </div>
       <select id="days" aria-label="Window">
         <option value="1">Last 24 hours</option>
@@ -236,7 +237,7 @@ input { font: inherit; color: var(--ink); background: var(--surface); border: 1p
     <div id="rules" class="sub">Nothing yet.</div>
   </section>
   </div>
-  <p class="sub">Reads logs on this computer only. Claude Code dollars use API list prices; Codex is shown in tokens. “Ask” and “Run review” send numbers and command names (no transcript) to your local <span class="mono">claude</span> or <span class="mono">codex</span> command. Reviews are the only files it writes.</p>
+  <p class="sub">Reads logs on this computer only. Claude Code dollars use API list prices; Codex and Copilot are shown in tokens. “Ask” and “Run review” send numbers and command names (no transcript) to your local <span class="mono">claude</span> or <span class="mono">codex</span> command. Reviews are the only files it writes.</p>
 </main>
 <div id="tip"></div>
 <script>
@@ -247,9 +248,10 @@ const usd = (n) => n == null ? "—" : n < 0.01 && n > 0 ? "<$0.01" : "$" + n.to
 const pct = (x) => isFinite(x) ? Math.round(x * 100) + "%" : "—";
 const dur = (s) => { const m = Math.round((s || 0) / 60); return m >= 60 ? Math.floor(m / 60) + "h" + String(m % 60).padStart(2, "0") : m + "m"; };
 const sum = (xs, f) => xs.reduce((a, x) => a + (f(x) || 0), 0);
-const HNAME = { "claude-code": "Claude Code", codex: "Codex" };
-const HCOL = { "claude-code": "--h-cc", codex: "--h-cx" };
-const HCLS = { "claude-code": "cc", codex: "cx" };
+const HNAME = { "claude-code": "Claude Code", codex: "Codex", copilot: "Copilot" };
+const HCOL = { "claude-code": "--h-cc", codex: "--h-cx", copilot: "--h-gh" };
+const HCLS = { "claude-code": "cc", codex: "cx", copilot: "gh" };
+const unpriced = (h) => h === "codex" || h === "copilot";
 const ROLE = { orchestrator: "Orchestrator", reviewer: "Approval reviewer", worker: "Subagent" };
 const RCOL = { orchestrator: "--s1", reviewer: "--s2", worker: "--s3" };
 const htag = (h) => `<span class="tag"><i style="background:var(${HCOL[h] || "--muted"})"></i>${HNAME[h] || esc(h)}</span>`;
@@ -282,11 +284,11 @@ function tiles() {
   const cc = ss.filter((s) => s.harness === "claude-code"), cost = sum(cc, (s) => s.cost_usd);
   const fs = findingsVisible(), fired = new Set(fs.map((f) => f.rule)).size;
   const counts = Object.entries(ss.reduce((m, s) => (m[s.harness] = (m[s.harness] || 0) + 1, m), {})).map(([h, n]) => `${HNAME[h] || h} ${n}`).join(" · ");
-  const spendNote = harness === "codex" ? "Codex is tokens only" : data.sources.claude ? `${cc.length} sessions, API list prices` : "Claude Code logs not found";
+  const spendNote = unpriced(harness) ? `${HNAME[harness]} is tokens only` : data.sources.claude ? `${cc.length} sessions, API list prices` : "Claude Code logs not found";
   const t = [
     ["sessions", "Sessions", ss.length, counts || "none"],
     ["tokens", "Tokens", tok(tot), tot ? pct(sum(ss, (s) => s.tokens.cache_read) / tot) + " cache reads" : ""],
-    ["spend", "Claude Code spend", harness === "codex" || !data.sources.claude ? "—" : usd(cost), spendNote],
+    ["spend", "Claude Code spend", unpriced(harness) || !data.sources.claude ? "—" : usd(cost), spendNote],
     ["orch", "Orchestration share", tot ? pct(orch / tot) : "—", "orchestrator + approval reviewers"],
     ["rules", "Health rules fired", `${fired} of 3`, `${fs.length} findings`],
   ];
@@ -330,7 +332,7 @@ const TILE = {
   },
   spend(ss) {
     const cc = ss.filter((s) => s.harness === "claude-code");
-    if (!cc.length) return `<div class="sub">${harness === "codex" ? "Codex sessions are shown in tokens only, without prices." : "No Claude Code sessions in this window."}</div>`;
+    if (!cc.length) return `<div class="sub">${unpriced(harness) ? `${HNAME[harness]} sessions are shown in tokens only, without prices.` : "No Claude Code sessions in this window."}</div>`;
     const parts = { input: 0, cache_read: 0, cache_write: 0, output: 0 }, models = {}, projects = {};
     cc.forEach((s) => { Object.keys(parts).forEach((k) => parts[k] += (s.cost_parts || {})[k] || 0);
       Object.entries(s.by_model || {}).forEach(([m, v]) => models[m] = (models[m] || 0) + (v.cost_usd || 0));
@@ -415,7 +417,8 @@ function sessionDetail(s) {
     s.agents.map((a) => `<tr><td style="white-space:nowrap"><span class="dot" style="background:var(${RCOL[a.role]})"></span> ${ROLE[a.role]}</td><td>${esc(a.label || "—")}</td>
       <td class="mono">${esc(a.models.join(", "))}</td><td class="num">${tok(a.tokens.total)}</td><td class="num">${pct(a.share)}</td><td class="num">${usd(a.cost_usd)}</td>
       <td class="num">${a.model_calls}</td><td class="num">${tok(a.max_context)}</td><td class="num">${a.tool_calls}</td><td class="num hide-sm">${dur(a.active_s)}</td></tr>`).join("") +
-    `</tbody></table></div><div class="sub" style="margin-top:6px">Fresh input ${tok(s.tokens.input)} · cache read ${tok(s.tokens.cache_read)} · cache write ${tok(s.tokens.cache_write)} · output ${tok(s.tokens.output)} ·
+    `</tbody></table></div>${s.compaction_tokens || s.agents.some((a) => a.tool_def_tokens) ? `<div class="sub" style="margin-top:6px">${s.agents.filter((a) => a.compactions || a.tool_def_tokens).map((a) =>
+      `${esc(a.label || ROLE[a.role])}: ${a.compactions ? `${a.compactions} compaction${a.compactions === 1 ? "" : "s"} used ${tok(a.compaction_tokens)}` : "no compactions"}${a.tool_def_tokens ? `, tool definitions ${tok(a.tool_def_tokens)} per call` : ""}`).join(" · ")}</div>` : ""}<div class="sub" style="margin-top:6px">Fresh input ${tok(s.tokens.input)} · cache read ${tok(s.tokens.cache_read)} · cache write ${tok(s.tokens.cache_write)} · output ${tok(s.tokens.output)} ·
     active ${dur(s.active_s)} of ${dur(s.duration_s)} wall · top tools: ${esc(Object.entries(s.tools).slice(0, 6).map(([k, v]) => `${k} ${v}`).join(", "))}${s.warnings ? ` · <span class="err">${esc(s.warnings.join("; "))}</span>` : ""}</div>`;
   const d = detail.get(s.session_id);
   if (!d) { loadDetail(s.session_id); return agents + `<p class="sub">Loading where the tokens went…</p>`; }
@@ -583,7 +586,7 @@ function setTab(t) {
 
 function render() {
   if (!data) return;
-  const s = data.sources, src = [s.claude && "Claude Code", s.codex && "Codex", s.reports && `${s.reports} report folder${s.reports > 1 ? "s" : ""}`].filter(Boolean).join(", ");
+  const s = data.sources, src = [s.claude && "Claude Code", s.codex && "Codex", s.copilot && "Copilot", s.reports && `${s.reports} report folder${s.reports > 1 ? "s" : ""}`].filter(Boolean).join(", ");
   $("#meta").textContent = `${new Date(data.since).toLocaleDateString()} to ${new Date(data.until).toLocaleDateString()} · read ${src || "nothing"} in ${data.seconds}s · ran ${new Date(data.ran_at).toLocaleTimeString()}` +
     (data.missing.length ? ` · not found: ${data.missing.join(", ")}` : "");
   tiles(); sessions(); askAll(); breakdowns(); rules();

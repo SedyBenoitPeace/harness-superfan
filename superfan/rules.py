@@ -74,7 +74,7 @@ def parse_run_report(path: str, tz: timezone) -> dict:
 
 
 def report_vs_logs(report_dirs: list, codex_root=None, claude_root=None, prices=None,
-                   tz: timezone = timezone.utc, tolerance: float = 0.10) -> list:
+                   tz: timezone = timezone.utc, tolerance: float = 0.10, copilot_root=None) -> list:
     """A run report should agree with the session logs for the same window."""
     out = []
     for d in report_dirs:
@@ -82,24 +82,29 @@ def report_vs_logs(report_dirs: list, codex_root=None, claude_root=None, prices=
             continue
         for name in sorted(os.listdir(d)):
             if name.endswith(".md"):
-                out += check_report(os.path.join(d, name), codex_root, claude_root, prices, tz, tolerance)
+                out += check_report(os.path.join(d, name), codex_root, claude_root, prices, tz, tolerance, copilot_root)
     return out
 
 
 def check_report(path: str, codex_root=None, claude_root=None, prices=None,
-                 tz: timezone = timezone.utc, tolerance: float = 0.10) -> list:
+                 tz: timezone = timezone.utc, tolerance: float = 0.10, copilot_root=None) -> list:
     """R2 for one run report (docs/runs/<name>.md); its project is the folder above docs/."""
     rep = parse_run_report(path, tz)
     problems = list(rep["problems"])
     # windows come from commit times to the minute; too short to compare reliably
-    if "tokens" in rep and "start" in rep and codex_root and rep["end"] - rep["start"] >= timedelta(minutes=5):
+    if "tokens" in rep and "start" in rep and (codex_root or copilot_root) and rep["end"] - rep["start"] >= timedelta(minutes=5):
         project = os.path.basename(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(path)))))
-        logs = [s for s in scan(None, codex_root, prices, rep["start"], rep["end"]) if s["project"] == project]
+        logs = [s for s in scan(None, codex_root, prices, rep["start"], rep["end"], copilot_root) if s["project"] == project]
         total = sum(s["tokens"]["total"] for s in logs)
         orch = sum(a["tokens"]["total"] for s in logs for a in s["agents"] if a["role"] != "worker")
+        comp = sum(s.get("compaction_tokens") or 0 for s in logs)
         said = rep["tokens"]
         if total and said["total"] is not None and abs(said["total"] - total) / total > tolerance:
-            problems.append(f"report says {said['total']:,.0f} tokens, logs say {total:,} for the same window")
+            if comp and abs(said["total"] - (total - comp)) / total <= tolerance:
+                problems.append(f"report says {said['total']:,.0f} tokens, logs say {total:,}: the report leaves out "
+                                f"{comp:,} context-compaction tokens")
+            else:
+                problems.append(f"report says {said['total']:,.0f} tokens, logs say {total:,} for the same window")
         if orch and said["orchestration"] is not None and abs(said["orchestration"] - orch) / orch > tolerance:
             problems.append(f"report says orchestration {said['orchestration']:,.0f}, logs say {orch:,}")
     if not problems:

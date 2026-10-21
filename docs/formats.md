@@ -64,6 +64,35 @@ Gotchas:
   (`superfan/prices.json`; API list prices, so on a subscription this is the
   API-equivalent value, not a bill).
 
+## GitHub Copilot CLI (1.0.9x) — `~/.copilot/session-state/<session id>/events.jsonl` (**tool results unconfirmed**)
+
+One folder per session: `events.jsonl` plus `workspace.yaml` (`cwd`, `git_root`,
+`repository`, `branch`; the project name is the folder of `git_root`). Every
+line is `{"type", "data", "id", "timestamp", "parentId"}`, plus `agentId` on a
+subagent's lines (absent = orchestrator).
+
+| `type` | What it gives |
+|---|---|
+| `session.start` | `sessionId`, `copilotVersion`, `context.cwd` / `gitRoot` |
+| `session.usage_record` | one per model call: `usage` {`model`, `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`, `reasoningTokens`, `initiator`, `interactionType`} |
+| `subagent.started` / `subagent.completed` | `agentName` (the agent type), `model`, `totalTokens`, `totalToolCalls`, `durationMs` |
+| `session.compaction_start` | `toolDefinitionsTokens`, `systemTokens`, `conversationTokens`, `tokenLimit` (Copilot's own estimate) |
+| `session.compaction_complete` | `compactionTokensUsed` {`inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`} |
+| `session.usage_checkpoint` | `promptCacheBreakState[].models.*.tool_tokens` (orchestrator only) |
+| `tool.execution_start` / `tool.execution_complete` | `toolCallId`, `toolName` (MCP tools are `<server>-<tool>`), `arguments`; `result.content` is what the model saw |
+| `user.message`, `assistant.message`, `system.message`, `summaryContent` | prompts and transcripts; never read |
+
+Gotchas:
+
+- `inputTokens` **includes** cache reads and writes; fresh input is the rest.
+- Compaction is a separate model call that `subagent.completed totalTokens`
+  leaves out. The parser adds it to the agent's tokens and also reports it
+  as `compaction_tokens` (and as model `compaction` in `by_model`).
+- Copilot's local size estimates (`compaction_start`) run about 1.4x under the
+  billed `inputTokens`; the parser only uses them for the tool-definition size.
+- `copilotUsage.totalNanoAiu` (AI credits) is a price unit; it is never read.
+  Copilot is reported in tokens only.
+
 ## Agent Harness Kit run reports — `docs/runs/<YYYY-MM-DD-HHMM>.md` (kit 3.9–3.12)
 
 Markdown written by `run-report.sh` at the end of a continuous run.
@@ -77,6 +106,7 @@ Markdown written by `run-report.sh` at the end of a continuous run.
 - `## Skipped`, `## Not started`, `## Waiting on a human`, `## Supervisor`, `## Branches`.
 
 The run ledger behind it lives in `.harness-run/` in the project:
-`usage.log` (`<feature|orchestration> <harness> <model> <input incl. cache> <cached> <output>`),
+`usage.log` (`<feature|orchestration> <harness> <model> <input incl. cache> <cached> <output>`;
+the kit's Copilot numbers leave out compaction, so R2 says so when that explains the gap),
 `cost.log` (`<feature> <dollars>`), `run-cost` (`agents $` / `orchestration $`),
 `models.log`, `budget.log`, `STOP`, `start` (run's first commit), `previous/`.

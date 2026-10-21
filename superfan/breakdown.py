@@ -9,7 +9,7 @@ the bill for every call that follows it. For each tool call we estimate
 and group both by a category: first by the tool's name (Read, apply_patch,
 spawn_agent...), then, for shell tools, by the command it ran. Categories are
 regular expressions, checked in order; pass your own dicts to fit another
-project. Works for Codex and Claude Code; Claude Code outputs also get a
+project. Works for Codex, Claude Code and Copilot; Claude Code outputs also get a
 dollar estimate (carried tokens at the model's cache-read price).
 """
 
@@ -20,18 +20,18 @@ import os
 import re
 import shlex
 
-from .parse import iter_jsonl, parse_ts, in_window, files_touched_since, Prices
+from .parse import iter_jsonl, parse_ts, in_window, files_touched_since, Prices, copilot_files, copilot_project
 
 # Tool names that say what the work is, whatever the arguments.
 TOOL_CATEGORIES = {
-    "reading files": r"^(Read|Grep|Glob|LS|view_image|read_file|list_dir|grep_files)$",
-    "editing files": r"^(Edit|Write|MultiEdit|NotebookEdit|apply_patch|write_file)$",
-    "subagent coordination": r"^(Task|Agent|SendMessage|TaskOutput|TaskStop|spawn_agent|send_message|wait|wait_agent"
+    "reading files": r"^(Read|Grep|Glob|LS|view_image|read_file|list_dir|grep_files|view|grep|glob)$",
+    "editing files": r"^(Edit|Write|MultiEdit|NotebookEdit|apply_patch|write_file|edit|create|str_replace_editor)$",
+    "subagent coordination": r"^(Task|task|Agent|SendMessage|TaskOutput|TaskStop|spawn_agent|send_message|wait|wait_agent"
                              r"|close_agent|list_agents|send_input)$",
     "planning and todos": r"^(TodoWrite|TaskCreate|TaskUpdate|TaskList|update_plan|ExitPlanMode|EnterPlanMode)$",
-    "web": r"^(WebFetch|WebSearch|web_search|web__run)$",
-    "polling running commands": r"^(write_stdin|BashOutput)$",
-    "skills": r"^Skill$",
+    "web": r"^(WebFetch|WebSearch|web_search|web__run|web_fetch)$",
+    "polling running commands": r"^(write_stdin|BashOutput|read_bash|write_bash)$",
+    "skills": r"^(Skill|skill)$",
     "MCP tools": r"^mcp__",
 }
 
@@ -48,7 +48,7 @@ DEFAULT_CATEGORIES = {
     "inline scripts": r"^\s*(python3?|node|ruby|perl|swift)\b",
 }
 
-SHELL_TOOLS = r"^(Bash|exec_command|shell|local_shell_call|shell_command)$"
+SHELL_TOOLS = r"^(Bash|bash|exec_command|shell|local_shell_call|shell_command)$"
 TOP_N = 12  # rows kept per drill-down list
 
 
@@ -320,6 +320,61 @@ def claude_outputs(root: str, prices: Prices | None = None, since=None, until=No
                             "agent_id": key, "role": th["role"], "agent": th["role"], "category": cat, "label": label,
                             "tool": name, "sample": sample, "tokens": tok, "calls_after": after, "carried": tok * after,
                             "carried_usd": round(tok * price_after[i] / 1_000_000, 6)})
+    return out, seconds
+
+
+# -------------------------------------------------------------------- Copilot
+
+def copilot_outputs(root: str, since=None, until=None, categories=None) -> tuple[list, dict]:
+    """Same records for ~/.copilot/session-state. Each agent (orchestrator, or a
+    subagent by agentId) is its own thread; its model calls are its
+    session.usage_record lines. Run time is tool start to tool complete."""
+    out: list = []
+    seconds: dict = {}
+    for path in copilot_files(root, since):
+        folder = os.path.dirname(path)
+        sid, project = os.path.basename(folder), None
+        threads: dict = {}
+        names: dict = {}
+        for r in iter_jsonl(path):
+            t, d, aid = r.get("type") or "", r.get("data") or {}, r.get("agentId")
+            if project is None:
+                project = copilot_project(folder, r)
+                if t == "session.start":
+                    sid = d.get("sessionId") or sid
+            if t == "subagent.started" and aid:
+                names[aid] = d.get("agentName") or "subagent"
+            ts = parse_ts(r.get("timestamp"))
+            if not in_window(ts, since, until):
+                continue
+            th = threads.setdefault(aid or "main", {"events": [], "calls": {}})
+            if t == "session.usage_record":
+                th["events"].append(("call",))
+            elif t == "tool.execution_start":
+                name, body = d.get("toolName") or "?", d.get("arguments") or {}
+                cat = classify(name, body, categories)
+                th["calls"][d.get("toolCallId")] = (cat, _label(name, body, cat), name, _sample(name, body), ts)
+            elif t == "tool.execution_complete":
+                cat, label, name, sample, t0 = th["calls"].get(d.get("toolCallId"), ("other", "?", "?", "", None))
+                if t0 and ts:
+                    seconds[cat] = seconds.get(cat, 0) + min(max((ts - t0).total_seconds(), 0), 600)
+                res = d.get("result")
+                text = _text(res.get("content") if isinstance(res, dict) else res) or _text(d.get("error"))
+                th["events"].append(("out", cat, len(text) // 4, label, name, sample))
+        for key, th in threads.items():
+            n_calls = sum(1 for e in th["events"] if e[0] == "call")
+            role = "orchestrator" if key == "main" else "worker"
+            seen = 0
+            for e in th["events"]:
+                if e[0] == "call":
+                    seen += 1
+                    continue
+                _, cat, tok, label, name, sample = e
+                after = n_calls - seen
+                out.append({"harness": "copilot", "session": sid, "project": project or "?", "agent_id": key,
+                            "role": role, "agent": names.get(key, role), "category": cat, "label": label,
+                            "tool": name, "sample": sample, "tokens": tok, "calls_after": after,
+                            "carried": tok * after, "carried_usd": None})
     return out, seconds
 
 
