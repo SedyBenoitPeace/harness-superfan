@@ -6,7 +6,18 @@ subagent, model, cache use, tool calls, time. Built to watch runs of the
 [Agent Harness Kit](https://github.com/SedyBenoitPeace/agent-harness-kit), but
 the parser works on any Claude Code, Codex or GitHub Copilot CLI session.
 
+It also writes **reviews**: one day, one kit run or any window, with the
+numbers computed in Python, the top problems ordered by tokens at stake, and
+a short summary written by a model from those numbers only. They sit in the
+page's Reviews tab, newest first.
+
 **Tested on macOS only. It has not been tested on Linux or Windows.**
+
+![Overview: sessions, tokens, Claude Code spend, orchestration share and health rules across Claude Code, Codex and Copilot](docs/screenshots/overview.png)
+
+![Reviews tab: a daily review with totals per harness, previous days, largest sessions and top problems](docs/screenshots/reviews.png)
+
+*Screenshots run on the synthetic test fixtures, not real sessions.*
 
 ## Your data stays on your machine
 
