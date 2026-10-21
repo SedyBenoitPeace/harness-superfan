@@ -6,15 +6,32 @@ subagent, model, cache use, tool calls, time. Built to watch runs of the
 [Agent Harness Kit](https://github.com/SedyBenoitPeace/agent-harness-kit), but
 the parser works on any Claude Code, Codex or GitHub Copilot CLI session.
 
-It only reads your logs and run reports. The one place it writes, and the
-only place it deletes, is its own reviews folder (see Reviews). Python 3.10+,
-standard library only. 
+## Your data stays on your machine
+
+- It reads only files already on your computer: the session logs Claude
+  Code, Codex and Copilot CLI write to `~/.claude/projects`,
+  `~/.codex/sessions` and `~/.copilot/session-state`, plus any run reports
+  you point it at. No account, no API key, no upload, no telemetry.
+- It never changes those files. The one place it writes, and the only place
+  it deletes, is its own reviews folder (see Reviews).
+- The web page listens on `127.0.0.1` only.
+- The one optional exception: **Ask Claude** / **Ask ChatGPT** and the
+  review summary call your own `claude` or `codex` CLI, which sends that
+  session's numbers and command names (never the transcript) to that model.
+  `review --with none` and simply not pressing the buttons keep everything
+  local.
+
+Python 3.10+, standard library only, nothing to install.
+
 ## Platforms
 
-Tested on macOS. The code is standard-library Python and Claude Code,
-Codex and Copilot keep their logs in the same places on Linux, so it should work there,
-but that is untested. Windows is untested. Automatic reviews use launchd
-(macOS); on Linux use cron or a systemd timer.
+| | Status |
+|---|---|
+| macOS | Tested; it is where it runs every day. Automatic reviews use launchd (`examples/launchd`). |
+| Linux | Should work: same Python, same log folders under your home. Untested. Use cron or a systemd timer for automatic reviews. |
+| Windows | Should work: the three CLIs keep their logs under `%USERPROFILE%` (`.claude\projects`, `.codex\sessions`, `.copilot\session-state`) and `~` resolves there. Untested, and there is no scheduling example yet (Task Scheduler would do it). |
+
+If you try it on Linux or Windows, an issue saying whether it worked is very welcome.
 
 ## Use
 
