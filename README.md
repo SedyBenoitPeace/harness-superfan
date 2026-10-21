@@ -6,6 +6,8 @@ subagent, model, cache use, tool calls, time. Built to watch runs of the
 [Agent Harness Kit](https://github.com/SedyBenoitPeace/agent-harness-kit), but
 the parser works on any Claude Code, Codex or GitHub Copilot CLI session.
 
+**Tested on macOS only. It has not been tested on Linux or Windows.**
+
 ## Your data stays on your machine
 
 - It reads only files already on your computer: the session logs Claude
@@ -28,8 +30,8 @@ Python 3.10+, standard library only, nothing to install.
 | | Status |
 |---|---|
 | macOS | Tested; it is where it runs every day. Automatic reviews use launchd (`examples/launchd`). |
-| Linux | Should work: same Python, same log folders under your home. Untested. Use cron or a systemd timer for automatic reviews. |
-| Windows | Should work: the three CLIs keep their logs under `%USERPROFILE%` (`.claude\projects`, `.codex\sessions`, `.copilot\session-state`) and `~` resolves there. Untested, and there is no scheduling example yet (Task Scheduler would do it). |
+| Linux | **Not tested.** It should work (same Python, same log folders under your home), but nobody has run it there yet. Use cron or a systemd timer for automatic reviews. |
+| Windows | **Not tested.** It should work (the three CLIs keep their logs under `%USERPROFILE%`: `.claude\projects`, `.codex\sessions`, `.copilot\session-state`, and `~` resolves there), but nobody has run it there yet, and there is no scheduling example yet (Task Scheduler would do it). |
 
 If you try it on Linux or Windows, an issue saying whether it worked is very welcome.
 
