@@ -50,7 +50,8 @@ def _num(s: str) -> float | None:
 
 
 def parse_run_report(path: str, tz: timezone) -> dict:
-    text = open(path, encoding="utf-8").read()
+    with open(path, encoding="utf-8") as fh:
+        text = fh.read()
     rep = {"path": os.path.basename(path), "problems": []}
     m = re.search(r"^- Start: \S+ \((\d{4}-\d\d-\d\d \d\d:\d\d)\)", text, re.M)
     n = re.search(r"^- End: \S+ \((\d{4}-\d\d-\d\d \d\d:\d\d)\)", text, re.M)
@@ -73,6 +74,34 @@ def parse_run_report(path: str, tz: timezone) -> dict:
     return rep
 
 
+def report_dirs(folders: list) -> list:
+    """Each folder may be a docs/runs folder, a project that has one, or a folder
+    of projects (every <project>/docs/runs one level down)."""
+    out = []
+    for d in folders:
+        d = os.path.expanduser(d)
+        runs = os.path.join(d, "docs", "runs")
+        if os.path.isdir(runs):
+            out.append(runs)
+        elif os.path.isdir(d) and not any(n.endswith(".md") for n in os.listdir(d)):
+            subs = sorted(os.path.join(d, n, "docs", "runs") for n in os.listdir(d)
+                          if os.path.isdir(os.path.join(d, n, "docs", "runs")))
+            out += subs or [d]
+        else:
+            out.append(d)
+    return list(dict.fromkeys(out))
+
+
+def report_project(path: str) -> str:
+    """A report lives in <project>/docs/runs/<name>.md."""
+    return os.path.basename(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(path)))))
+
+
+def same_project(session_project: str, project: str) -> bool:
+    """Parallel lanes run in <project>-<feature id> worktrees next to the repo."""
+    return session_project == project or bool(re.fullmatch(re.escape(project) + r"-[A-Za-z]+\d+-\d+", session_project or ""))
+
+
 def report_vs_logs(report_dirs: list, codex_root=None, claude_root=None, prices=None,
                    tz: timezone = timezone.utc, tolerance: float = 0.10, copilot_root=None) -> list:
     """A run report should agree with the session logs for the same window."""
@@ -93,8 +122,8 @@ def check_report(path: str, codex_root=None, claude_root=None, prices=None,
     problems = list(rep["problems"])
     # windows come from commit times to the minute; too short to compare reliably
     if "tokens" in rep and "start" in rep and (codex_root or copilot_root) and rep["end"] - rep["start"] >= timedelta(minutes=5):
-        project = os.path.basename(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(path)))))
-        logs = [s for s in scan(None, codex_root, prices, rep["start"], rep["end"], copilot_root) if s["project"] == project]
+        project = report_project(path)
+        logs = [s for s in scan(None, codex_root, prices, rep["start"], rep["end"], copilot_root) if same_project(s["project"], project)]
         total = sum(s["tokens"]["total"] for s in logs)
         orch = sum(a["tokens"]["total"] for s in logs for a in s["agents"] if a["role"] != "worker")
         comp = sum(s.get("compaction_tokens") or 0 for s in logs)

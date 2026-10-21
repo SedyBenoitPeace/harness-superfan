@@ -70,5 +70,56 @@ class Review(unittest.TestCase):
             self.assertEqual(sorted(os.listdir(d)), ["notes.md"])
 
 
+def _report(root, project, name, cost=False):
+    d = os.path.join(root, project, "docs", "runs")
+    os.makedirs(d, exist_ok=True)
+    p = os.path.join(d, name)
+    with open(p, "w") as fh:
+        fh.write("# Run report\n\n## Summary\n\n- Start: aaa (2026-01-05 09:00)\n- End: bbb (2026-01-05 09:30)\n")
+        if cost:
+            fh.write("- Cost: $1.00 — feature agents $0.70, orchestration $0.30 (30%)\n")
+    return p
+
+
+class RunReports(unittest.TestCase):
+    def test_folders_of_projects_expand(self):
+        with tempfile.TemporaryDirectory() as d:
+            a = _report(d, "repo", "r1.md")
+            _report(d, "other", "r2.md")
+            os.makedirs(os.path.join(d, "no-kit"))
+            runs = os.path.dirname(a)
+            self.assertEqual(review.rules.report_dirs([d]), [os.path.join(d, "other", "docs", "runs"), runs])
+            self.assertEqual(review.rules.report_dirs([os.path.join(d, "repo")]), [runs])
+            self.assertEqual(review.rules.report_dirs([runs, runs]), [runs])
+
+    def test_lane_worktrees_count_as_the_project(self):
+        same = review.rules.same_project
+        self.assertTrue(same("repo", "repo"))
+        self.assertTrue(same("repo-M32-002", "repo"))
+        self.assertFalse(same("repo-api", "repo"))
+        self.assertFalse(same("other", "repo"))
+
+    def test_harness_comes_from_the_logs(self):
+        with tempfile.TemporaryDirectory() as d:
+            a = _report(d, "repo", "r1.md")
+            b = _report(d, "elsewhere", "r2.md")
+            c = _report(d, "elsewhere", "r3.md", cost=True)
+            who = review.report_harnesses(CFG, [a, b, c])
+            self.assertIn("Codex", who[a])
+            self.assertEqual(who[b], "")  # no sessions in that project, no dollars
+            self.assertEqual(who[c], "Claude Code")  # only the Claude Code edition writes dollars
+
+    def test_run_review_keeps_to_the_report_project(self):
+        with tempfile.TemporaryDirectory() as d:
+            here = review.build(CFG, "run", datetime(2026, 1, 5, 9, tzinfo=timezone.utc),
+                                datetime(2026, 1, 5, 9, 31, tzinfo=timezone.utc), _report(d, "repo", "r1.md"))
+            away = review.build(CFG, "run", datetime(2026, 1, 5, 9, tzinfo=timezone.utc),
+                                datetime(2026, 1, 5, 9, 31, tzinfo=timezone.utc), _report(d, "elsewhere", "r2.md"))
+        self.assertTrue(here["top_sessions"])
+        self.assertTrue(all(s["project"] == "repo" for s in here["top_sessions"]))
+        self.assertEqual(away["top_sessions"], [])
+        self.assertFalse(any(v for v in away["where_tokens_went"].values()))
+
+
 if __name__ == "__main__":
     unittest.main()

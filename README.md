@@ -56,7 +56,8 @@ python3 -m superfan scan --claude ~/.claude/projects --codex ~/.codex/sessions \
 # the 5 largest, as a Markdown table (--by cost for Claude Code dollars)
 python3 -m superfan top sessions.json --n 5
 
-# health rules (see below); --reports takes the kit's docs/runs folders,
+# health rules (see below); --reports takes the kit's docs/runs folders, a
+# project folder, or a folder of projects (every <project>/docs/runs inside);
 # --tz the UTC offset their local times are in
 python3 -m superfan check --codex ~/.codex/sessions --reports ~/src/app/docs/runs --tz +02:00
 ```
@@ -64,7 +65,7 @@ python3 -m superfan check --codex ~/.codex/sessions --reports ~/src/app/docs/run
 ### Web page
 
 ```sh
-python3 -m superfan serve --reports ~/src/app/docs/runs
+python3 -m superfan serve --reports ~/src ~/work   # folders of projects
 ```
 
 Opens `http://127.0.0.1:8765` with a **Run now** button, a window picker
@@ -144,7 +145,9 @@ and projects. Delete one from the page, or old ones with
 (on `review` and `serve`) deletes reviews older than N days after each new
 one; it is off by default. Deleting only touches files named like a review
 in that folder, never logs or run reports. The page's Reviews tab runs the same command and lists the
-same folder.
+same folder. Its run report picker names the assistant behind each run (Claude Code,
+Codex or Copilot), from the sessions in that project during the report's
+window; a run review only counts that project's sessions.
 
 ### Automatic reviews (optional, macOS)
 

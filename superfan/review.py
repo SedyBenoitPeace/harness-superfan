@@ -88,20 +88,21 @@ def build(cfg: dict, scope: str, since: datetime, until: datetime, report: str |
           compare_days: int = 0) -> dict:
     """All the numbers for one review. `cfg` has the same keys as `serve`'s config."""
     sessions = scan(cfg["claude"], cfg["codex"], cfg["prices"], since, until, cfg.get("copilot"))
+    if report:  # a run review covers the report's own project, not whatever else ran at the same time
+        project = rules.report_project(report)
+        sessions = [s for s in sessions if rules.same_project(s["project"], project)]
     sessions.sort(key=lambda r: -r["tokens"]["total"])
+    keep = {s["session_id"] for s in sessions}
     outs, breakdown = [], {}
-    if cfg["codex"] and os.path.isdir(cfg["codex"]):
-        o, secs = codex_outputs(cfg["codex"], since, until)
-        outs += o
-        breakdown["codex"] = summarise(o, secs)
-    if cfg["claude"] and os.path.isdir(cfg["claude"]):
-        o, secs = claude_outputs(cfg["claude"], Prices(cfg["prices"]), since, until)
-        outs += o
-        breakdown["claude-code"] = summarise(o, secs)
-    if cfg.get("copilot") and os.path.isdir(cfg["copilot"]):
-        o, secs = copilot_outputs(cfg["copilot"], since, until)
-        outs += o
-        breakdown["copilot"] = summarise(o, secs)
+    for name, root, collect in (("codex", cfg["codex"], lambda r: codex_outputs(r, since, until)),
+                                ("claude-code", cfg["claude"], lambda r: claude_outputs(r, Prices(cfg["prices"]), since, until)),
+                                ("copilot", cfg.get("copilot"), lambda r: copilot_outputs(r, since, until))):
+        if root and os.path.isdir(root):
+            o, secs = collect(root)
+            if report:
+                o = [x for x in o if x["session"] in keep]
+            outs += o
+            breakdown[name] = summarise(o, secs)
     per_session: dict = {}
     for o in outs:
         per_session.setdefault(o["session"], []).append(o)
@@ -307,6 +308,37 @@ def latest_reports(report_dirs: list, limit: int = 20) -> list:
                     p = os.path.join(d, name)
                     found.append((os.path.getmtime(p), f"{i}:{name}", p))
     return [(rid, p) for _, rid, p in sorted(found, reverse=True)[:limit]]
+
+
+HARNESS_NAME = {"claude-code": "Claude Code", "codex": "Codex", "copilot": "Copilot"}
+_harness_cache: dict = {}  # (path, mtime) -> label
+
+
+def report_harnesses(cfg: dict, paths: list) -> dict:
+    """Which coding assistant ran each report, as {path: "Codex"}, from the
+    sessions in the report's project during its window. One scan covers every
+    report not seen before. With no matching logs, a report with dollar costs
+    is Claude Code (only that edition writes them); otherwise the label is ""."""
+    out, todo = {}, {}
+    for p in paths:
+        key = (p, os.path.getmtime(p))
+        if key in _harness_cache:
+            out[p] = _harness_cache[key]
+        else:
+            todo[p] = (key, rules.parse_run_report(p, cfg["tz"]))
+    timed = [r for _, r in todo.values() if "start" in r]
+    sessions = scan(cfg["claude"], cfg["codex"], cfg["prices"], min(r["start"] for r in timed),
+                    max(r["end"] for r in timed), cfg.get("copilot")) if timed else []
+    for p, (key, rep) in todo.items():
+        found = set()
+        if "start" in rep:
+            project = rules.report_project(p)
+            found = {s["harness"] for s in sessions if rules.same_project(s["project"], project)
+                     and s["start"] and s["end"] and parse_ts(s["start"]) < rep["end"] and parse_ts(s["end"]) > rep["start"]}
+        if not found and "cost" in rep:
+            found = {"claude-code"}
+        _harness_cache[key] = out[p] = " + ".join(HARNESS_NAME.get(h, h) for h in sorted(found))
+    return out
 
 
 def report_window(path: str, tz) -> tuple[datetime, datetime] | None:

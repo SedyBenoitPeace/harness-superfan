@@ -121,12 +121,13 @@ def make_handler(cfg: dict):
                 return self._json(200, advice.session_detail(s, state["outputs"].get(sid, []),
                                                              cfg["orchestrator_limit"], cfg["output_limit"]))
             if url.path == "/api/reviews":
+                reports = review.latest_reports(cfg["reports"])
+                who = review.report_harnesses(cfg, [p for _, p in reports])
                 return self._json(200, {
                     "dir": cfg.get("reviews") or review.default_dir(),
                     "reviews": review.list_reviews(cfg.get("reviews")),
-                    "reports": [{"id": rid, "name": os.path.basename(p), "project": os.path.basename(
-                        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(p)))))}
-                                for rid, p in review.latest_reports(cfg["reports"])],
+                    "reports": [{"id": rid, "name": os.path.basename(p), "project": rules.report_project(p),
+                                 "harness": who.get(p, "")} for rid, p in reports],
                     "today": datetime.now(cfg["tz"]).date().isoformat(), "keep_days": cfg.get("keep_days") or 0})
             if url.path == "/api/review":
                 text = review.load(q.get("name", [""])[0], cfg.get("reviews"))

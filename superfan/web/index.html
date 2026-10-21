@@ -570,8 +570,10 @@ async function loadReviews(openName) {
   rv.list = j.reviews; rv.reports = j.reports; $("#rv-dir").textContent = j.dir;
   $("#rv-keep").textContent = j.keep_days ? `Reviews older than ${j.keep_days} days are deleted after each new one.` : "Kept until you delete them (or start serve with --keep-days).";
   if (!$("#rv-day").value) $("#rv-day").value = j.today;
-  $("#rv-run").innerHTML = j.reports.length ? j.reports.map((r) => `<option value="${esc(r.id)}">${esc(r.project)} · ${esc(r.name)}</option>`).join("")
+  const picked = $("#rv-run").value;
+  $("#rv-run").innerHTML = j.reports.length ? j.reports.map((r) => `<option value="${esc(r.id)}">${esc(r.project)} · ${esc(r.name)}${r.harness ? " · " + esc(r.harness) : ""}</option>`).join("")
     : `<option value="">No run reports (start serve with --reports)</option>`;
+  if (j.reports.some((r) => r.id === picked)) $("#rv-run").value = picked;
   reviewList();
   const name = [openName, rv.open].find((n) => n && rv.list.some((r) => r.name === n)) || (rv.list[0] || {}).name;
   if (name) openReview(name); else { rv.open = null; $("#rv-view").innerHTML = ""; }

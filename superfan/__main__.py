@@ -94,7 +94,7 @@ def cmd_check(a: argparse.Namespace) -> int:
     sessions = scan(a.claude, a.codex, prices, since, until, a.copilot)
     findings = rules.orchestrator_share(sessions, a.orchestrator_limit)
     findings += rules.frequent_compaction(sessions) + rules.tool_definitions(sessions)
-    findings += rules.report_vs_logs(a.reports or [], a.codex, a.claude, prices, _tz(a.tz), copilot_root=a.copilot)
+    findings += rules.report_vs_logs(rules.report_dirs(a.reports or []), a.codex, a.claude, prices, _tz(a.tz), copilot_root=a.copilot)
     findings += rules.large_outputs(_outputs(a, prices, since, until), a.output_limit)
     print(json.dumps(findings, indent=1, default=str))
     return 0
@@ -125,7 +125,7 @@ def cmd_report(a: argparse.Namespace) -> int:
               f"orchestration {r['orchestration_share']:.0%}, {r['subagents']} subagents")
     findings = rules.orchestrator_share(rows, a.orchestrator_limit)
     findings += rules.frequent_compaction(rows) + rules.tool_definitions(rows)
-    findings += rules.report_vs_logs(a.reports or [], a.codex, a.claude, prices, _tz(a.tz), copilot_root=a.copilot)
+    findings += rules.report_vs_logs(rules.report_dirs(a.reports or []), a.codex, a.claude, prices, _tz(a.tz), copilot_root=a.copilot)
     findings += rules.large_outputs(_outputs(a, prices, since, until), a.output_limit)
     print("\nHealth rules:")
     if not findings:
@@ -146,7 +146,7 @@ def _cfg(a: argparse.Namespace) -> dict:
     return {"claude": os.path.expanduser(a.claude) if a.claude else None,
             "codex": os.path.expanduser(a.codex) if a.codex else None,
             "copilot": os.path.expanduser(a.copilot) if a.copilot else None,
-            "reports": [os.path.expanduser(d) for d in a.reports or []],
+            "reports": rules.report_dirs(a.reports or []),
             "tz": _tz(a.tz) if a.tz else datetime.now().astimezone().tzinfo, "prices": prices,
             "orchestrator_limit": a.orchestrator_limit, "output_limit": a.output_limit, "ask_model": a.ask_model,
             "ask_codex_model": a.ask_codex_model, "reviews": os.path.expanduser(a.reviews) if a.reviews else None,
@@ -228,7 +228,7 @@ def main(argv=None) -> int:
     c.add_argument("--claude")
     c.add_argument("--codex")
     c.add_argument("--copilot")
-    c.add_argument("--reports", nargs="*", help="docs/runs folders of projects that use the kit")
+    c.add_argument("--reports", nargs="*", help="docs/runs folders, projects, or folders of projects that use the kit")
     c.add_argument("--tz", default="+00:00", help="UTC offset the run reports' local times are in")
     c.add_argument("--days", type=float, default=7)
     c.add_argument("--until")
@@ -247,7 +247,7 @@ def main(argv=None) -> int:
     w.add_argument("--claude", default="~/.claude/projects", help="Claude Code projects folder ('' to skip)")
     w.add_argument("--codex", default="~/.codex/sessions", help="Codex sessions folder ('' to skip)")
     w.add_argument("--copilot", default="~/.copilot/session-state", help="Copilot CLI session-state folder ('' to skip)")
-    w.add_argument("--reports", nargs="*", default=[], help="docs/runs folders of projects that use the kit")
+    w.add_argument("--reports", nargs="*", default=[], help="docs/runs folders, projects, or folders of projects that use the kit")
     w.add_argument("--tz", help="UTC offset of the run reports' local times (default: this computer's)")
     w.add_argument("--port", type=int, default=8765)
     w.add_argument("--prices")

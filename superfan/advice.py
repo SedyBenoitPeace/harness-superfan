@@ -367,5 +367,8 @@ def ask_claude(prompt: str, model: str = "sonnet", timeout: int = 240) -> str:
         cmd += ["--model", model]
     r = subprocess.run(cmd, input=prompt, capture_output=True, text=True, timeout=timeout)
     if r.returncode != 0:
-        raise RuntimeError((r.stderr or r.stdout or f"claude exited with {r.returncode}").strip()[:500])
+        msg = (r.stderr or r.stdout or f"claude exited with {r.returncode}").strip()[:500]
+        if "not logged in" in msg.lower():  # the desktop app has its own login; the CLI needs one too
+            msg += " (the claude command line tool is logged out: run `claude auth login` in a terminal, then try again)"
+        raise RuntimeError(msg)
     return r.stdout.strip()
