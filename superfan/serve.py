@@ -117,7 +117,7 @@ def make_handler(cfg: dict):
                 sid = q.get("id", [""])[0]
                 s = find(sid)
                 if not s:
-                    return self._json(404, {"error": "Session not in the last run. Press Run now."})
+                    return self._json(404, {"error": "Session not in the last run. Press Refresh."})
                 return self._json(200, advice.session_detail(s, state["outputs"].get(sid, []),
                                                              cfg["orchestrator_limit"], cfg["output_limit"]))
             if url.path == "/api/reviews":
@@ -224,7 +224,7 @@ def make_handler(cfg: dict):
                         return self._json(502, {"error": str(e)})
                 s = find(sid)
                 if not s:
-                    return self._json(404, {"error": "Session not in the last run. Press Run now."})
+                    return self._json(404, {"error": "Session not in the last run. Press Refresh."})
                 detail = advice.session_detail(s, state["outputs"].get(sid, []),
                                                cfg["orchestrator_limit"], cfg["output_limit"])
                 try:

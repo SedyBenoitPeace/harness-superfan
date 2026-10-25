@@ -176,7 +176,7 @@ input { font: inherit; color: var(--ink); background: var(--surface); border: 1p
         <option value="day">A specific day…</option>
       </select>
       <input type="date" id="day" aria-label="Day" hidden>
-      <button class="primary" id="run">Run now</button>
+      <button class="primary" id="run" title="Read the logs again for this window. The harness filter, open rows and tab stay as they are.">↻ Refresh</button>
     </div>
   </header>
 
@@ -232,7 +232,7 @@ input { font: inherit; color: var(--ink); background: var(--surface); border: 1p
         <span><i style="background:var(--s3)"></i>Subagents</span>
       </div>
     </div>
-    <div class="scroll" id="sessions"><div class="empty">Press Run now to read your logs.</div></div>
+    <div class="scroll" id="sessions"><div class="empty">Press Refresh to read your logs.</div></div>
   </section>
 
   <section class="card" id="ask-all" hidden>
@@ -257,6 +257,8 @@ const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<
 const tok = (n) => n >= 1e9 ? (n / 1e9).toFixed(2) + "B" : n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? Math.round(n / 1e3) + "k" : String(Math.round(n || 0));
 const usd = (n) => n == null ? "—" : n < 0.01 && n > 0 ? "<$0.01" : "$" + n.toFixed(2);
 const pct = (x) => isFinite(x) ? Math.round(x * 100) + "%" : "—";
+// Session start in local time, e.g. "Sat 25 Oct, 18:54".
+const when = (iso) => iso ? new Date(iso).toLocaleString([], { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "";
 const dur = (s) => { const m = Math.round((s || 0) / 60); return m >= 60 ? Math.floor(m / 60) + "h" + String(m % 60).padStart(2, "0") : m + "m"; };
 const sum = (xs, f) => xs.reduce((a, x) => a + (f(x) || 0), 0);
 const HNAME = { "claude-code": "Claude Code", codex: "Codex", copilot: "Copilot" };
@@ -386,7 +388,7 @@ const SESS_HEAD = (first, third) => `<thead><tr><th>${first}</th><th>Harness</th
 function sessRow(s, i, child) {
   const id = s.session_id, isOpen = open.has("s:" + id);
   let h = `<tr class="click ${child ? "child" : ""}" data-key="s:${esc(id)}" id="row-${esc(id)}"><td><span class="caret">${isOpen ? "▾" : "▸"}</span>${child ? "" : i + 1}</td>
-    <td>${htag(s.harness)}</td><td>${child ? `<span class="mono">${esc(id.slice(0, 8))}</span> <span class="muted">${esc((s.start || "").slice(5, 16).replace("T", " "))}</span>` : esc(s.project)}</td>
+    <td>${htag(s.harness)}</td><td>${child ? `<span class="mono">${esc(id.slice(0, 8))}</span> <span class="muted">${esc(when(s.start))}</span>` : `${esc(s.project)} <span class="muted">${esc(when(s.start))}</span>`}</td>
     <td class="mono hide-sm">${child ? esc(s.models.join(", ")) : esc(id.slice(0, 8))}</td><td class="num">${tok(s.tokens.total)}</td>
     <td class="num">${usd(s.cost_usd)}</td><td class="num hide-sm">${dur(s.active_s)}</td><td class="num hide-sm">${s.model_calls}</td><td>${roleSplit(s.agents)}</td></tr>`;
   if (isOpen) h += `<tr class="detail"><td colspan="9">${sessionDetail(s)}</td></tr>`;
@@ -650,10 +652,10 @@ async function post(url, body) {
 async function run() {
   const btn = $("#run"); btn.disabled = true; btn.textContent = "Reading logs…"; $("#error").hidden = true;
   const sel = $("#days").value, body = sel === "day" ? { day: $("#day").value } : { days: +sel };
-  if (sel === "day" && !body.day) { btn.disabled = false; btn.textContent = "Run now"; $("#day").focus(); return; }
+  if (sel === "day" && !body.day) { btn.disabled = false; btn.textContent = "↻ Refresh"; $("#day").focus(); return; }
   try { data = await post("/api/run", body); detail.clear(); answers.clear(); render(); }
   catch (e) { $("#error").hidden = false; $("#error").textContent = "Run failed: " + e.message; }
-  btn.disabled = false; btn.textContent = "Run now";
+  btn.disabled = false; btn.textContent = "↻ Refresh";
 }
 async function ask(box, engine) {
   const sid = box.dataset.sid, all = sid === "*", key = all ? "*" + harness : sid, redraw = all ? askAll : sessions;
@@ -721,8 +723,12 @@ document.addEventListener("mousemove", (e) => {
   tip.style.left = Math.max(8, Math.min(e.clientX + 12, innerWidth - tip.offsetWidth - 8)) + "px"; tip.style.top = (e.clientY + 14) + "px";
 });
 try { if (localStorage.getItem("superfan-tab") === "reviews") setTab("reviews"); } catch (e) {}
+// Show the last run straight away; if it is older than a few minutes, refresh it with the same window.
+const STALE_MS = 5 * 60 * 1000;
 fetch("/api/last").then((r) => r.json()).then((j) => {
-  if (j && j.sessions) { data = j; syncWindow(); render(); } else run();
+  if (!(j && j.sessions)) return run();
+  data = j; syncWindow(); render();
+  if (Date.now() - new Date(j.ran_at) > STALE_MS) run();
 }).catch(() => {});
 </script>
 </body>
