@@ -68,7 +68,7 @@ python3 -m superfan check --codex ~/.codex/sessions --reports ~/src/app/docs/run
 python3 -m superfan serve --reports ~/src ~/work   # folders of projects
 ```
 
-Opens `http://127.0.0.1:8765` with a **Run now** button, a window picker
+Opens `http://127.0.0.1:8765` with a **Refresh** button (re-reads the logs for the current window and keeps the filter; a run older than 5 minutes refreshes on page load), a window picker
 (24 hours to 90 days) and a harness filter (All, Claude Code, Codex, Copilot) that
 applies to the whole page:
 
