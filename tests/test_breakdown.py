@@ -4,7 +4,7 @@ import os
 import unittest
 from datetime import datetime, timezone
 
-from superfan.breakdown import classify, _label, claude_outputs, codex_breakdown, copilot_outputs
+from superfan.breakdown import classify, _label, _sample, claude_outputs, codex_breakdown, copilot_outputs
 from superfan.parse import scan
 from superfan.advice import advise
 
@@ -34,6 +34,13 @@ class Classify(unittest.TestCase):
         self.assertEqual(_label("exec", cell), "git diff")
         self.assertEqual(classify("exec", 'text(await tools.write_stdin({session_id:1,chars:""}))'),
                          "polling running commands")
+
+    def test_codex_browser_js(self):
+        self.assertEqual(classify("js", '{"code":"await cua.getState()"}'), "browser automation")
+
+    def test_copilot_view_sample_is_the_path(self):
+        self.assertEqual(_sample("view", {"path": "/repo/src/a.ts", "view_range": [1, 50]}), "/repo/src/a.ts")
+        self.assertEqual(_sample("grep", {"pattern": "foo", "path": "/repo"}), "foo")
 
     def test_labels(self):
         self.assertEqual(_label("Read", {"file_path": "/repo/src/app.ts"}), "Read app.ts")
