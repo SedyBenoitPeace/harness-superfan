@@ -30,6 +30,7 @@ TOOL_CATEGORIES = {
                              r"|close_agent|list_agents|send_input)$",
     "planning and todos": r"^(TodoWrite|TaskCreate|TaskUpdate|TaskList|update_plan|ExitPlanMode|EnterPlanMode)$",
     "web": r"^(WebFetch|WebSearch|web_search|web__run|web_fetch)$",
+    "browser automation": r"^js$",  # Codex's browser / computer-use JavaScript cells
     "polling running commands": r"^(write_stdin|BashOutput|read_bash|write_bash)$",
     "skills": r"^(Skill|skill)$",
     "MCP tools": r"^mcp__",
@@ -150,7 +151,7 @@ def _sample(tool: str, body) -> str:
     cmd, inner = _parts(tool, body)
     s = cmd
     if not s and isinstance(body, dict):
-        s = (body.get("file_path") or body.get("pattern") or body.get("description") or body.get("url")
+        s = (body.get("file_path") or body.get("pattern") or body.get("path") or body.get("description") or body.get("url")
              or body.get("query") or "")
     if not s and inner:
         s = inner
