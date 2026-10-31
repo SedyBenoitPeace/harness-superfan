@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass, field, asdict
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Iterable
 
 TOKEN_KEYS = ("input", "cache_read", "cache_write", "output")
@@ -224,21 +224,16 @@ def in_window(ts: datetime | None, since: datetime | None, until: datetime | Non
 
 
 def files_touched_since(root: str, since: datetime | None, until: datetime | None = None) -> list[str]:
-    """Log files written to at or after `since`. With `until`, also drops files created
-    after it (where the OS records creation time, as macOS does): they can't hold older events."""
+    """Log files written to at or after `since`. `until` is accepted for symmetry but not used:
+    a file's creation time says nothing about its events when logs were copied or restored."""
     out = []
     for dirpath, _dirs, names in os.walk(root):
         for n in names:
             if not n.endswith(".jsonl"):
                 continue
             p = os.path.join(dirpath, n)
-            st = os.stat(p)
-            if since is not None and datetime.fromtimestamp(st.st_mtime, timezone.utc) < since:
-                continue
-            born = getattr(st, "st_birthtime", None)
-            if until is not None and born and datetime.fromtimestamp(born, timezone.utc) > until + timedelta(minutes=1):
-                continue
-            out.append(p)
+            if since is None or datetime.fromtimestamp(os.path.getmtime(p), timezone.utc) >= since:
+                out.append(p)
     return sorted(out)
 
 

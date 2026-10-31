@@ -93,24 +93,22 @@ class Serve(unittest.TestCase):
 
 
 
-class BornAfter(unittest.TestCase):
-    def test_files_created_after_the_window_are_skipped(self):
+
+class CopiedLogs(unittest.TestCase):
+    def test_a_recently_created_file_with_old_events_is_still_read(self):
+        """Copied or restored logs are new files with old events (macOS records creation time)."""
         from unittest import mock
         from superfan import parse
         with tempfile.TemporaryDirectory() as d:
-            for n in ("a.jsonl", "b.jsonl"):
-                open(os.path.join(d, n), "w").close()
+            open(os.path.join(d, "a.jsonl"), "w").close()
             real = os.stat
-            t0 = datetime(2026, 1, 10, tzinfo=timezone.utc).timestamp()
 
             def fake(p, *a, **k):
                 st = real(p, *a, **k)
-                born = t0 if p.endswith("a.jsonl") else t0 + 86400 * 5
-                return mock.Mock(st_mtime=st.st_mtime, st_birthtime=born)
+                return mock.Mock(st_mtime=st.st_mtime, st_birthtime=st.st_mtime)
             with mock.patch.object(parse.os, "stat", fake):
                 got = parse.files_touched_since(d, None, datetime(2026, 1, 12, tzinfo=timezone.utc))
             self.assertEqual([os.path.basename(p) for p in got], ["a.jsonl"])
-
 
 if __name__ == "__main__":
     unittest.main()
