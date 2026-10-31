@@ -124,6 +124,19 @@ tr.has-hint > td { border-bottom: 0; }
 .answer ul { padding-left: 18px; margin: 4px 0; }
 .answer code { font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
 .err { color: var(--critical); }
+#progress[hidden] { display: none; }
+#progress { display: grid; grid-template-columns: 18px 1fr auto; gap: 6px 10px; align-items: center; font-size: 13px; }
+#progress .h { grid-column: 1 / -1; font-weight: 600; }
+#progress .st { text-align: center; color: var(--muted); }
+#progress .done .st { color: var(--good); }
+#progress .failed .st { color: var(--critical); }
+#progress .running { font-weight: 600; }
+#progress .running .st::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 50%;
+  border: 2px solid var(--axis); border-top-color: var(--ink); animation: spin .8s linear infinite; }
+#progress .row { display: contents; }
+#progress .num { color: var(--ink-2); font-variant-numeric: tabular-nums; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { #progress .running .st::before { animation: none; } }
 #tip { position: fixed; pointer-events: none; background: var(--surface); color: var(--ink); border: 1px solid var(--ring);
   border-radius: 8px; padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 16px rgba(0,0,0,.12); display: none; z-index: 10; max-width: 360px; }
 .scroll { overflow-x: auto; }
@@ -185,6 +198,7 @@ input { font: inherit; color: var(--ink); background: var(--surface); border: 1p
     <button role="tab" data-tab="reviews" aria-selected="false">Reviews</button>
   </nav>
   <div id="error" class="card err" hidden></div>
+  <div id="progress" class="card" hidden aria-live="polite"></div>
   <div id="tab-reviews" hidden>
     <section class="card">
       <h2>Run a review</h2>
@@ -649,12 +663,34 @@ async function post(url, body) {
   if (!r.ok) throw new Error(j.error || r.statusText);
   return j;
 }
+// While a run reads the logs, show each source and how long it has taken.
+const MARK = { waiting: "○", running: "", done: "✓", failed: "✕" };
+function showProgress(p) {
+  const box = $("#progress");
+  if (!p || !p.steps) { box.hidden = true; return; }
+  box.hidden = false;
+  box.innerHTML = `<div class="h">${data ? "Refreshing" : "Reading your logs"} · ${p.elapsed.toFixed(0)}s${data ? " (the numbers below are from the last run)" : ""}</div>` +
+    p.steps.map((s) => `<div class="row ${s.status}"><span class="st">${MARK[s.status]}</span><span>${esc(s.label)}${s.note ? ` <span class="sub">· ${esc(s.note)}</span>` : ""}</span>` +
+      `<span class="num">${s.seconds == null ? "" : s.seconds.toFixed(1) + "s"}</span></div>`).join("");
+}
+let polling = null;
+function watchProgress() {
+  if (polling) return;
+  const tick = async () => {
+    try { const p = await (await fetch("/api/progress")).json(); if (polling) showProgress(p.running ? p : null); } catch (e) {}
+  };
+  tick(); polling = setInterval(tick, 400);
+}
+function stopProgress() { clearInterval(polling); polling = null; showProgress(null); }
 async function run() {
   const btn = $("#run"); btn.disabled = true; btn.textContent = "Reading logs…"; $("#error").hidden = true;
   const sel = $("#days").value, body = sel === "day" ? { day: $("#day").value } : { days: +sel };
   if (sel === "day" && !body.day) { btn.disabled = false; btn.textContent = "↻ Refresh"; $("#day").focus(); return; }
+  if (!data) $("#meta").textContent = "Reading logs…";
+  watchProgress();
   try { data = await post("/api/run", body); detail.clear(); answers.clear(); render(); }
   catch (e) { $("#error").hidden = false; $("#error").textContent = "Run failed: " + e.message; }
+  stopProgress();
   btn.disabled = false; btn.textContent = "↻ Refresh";
 }
 async function ask(box, engine) {

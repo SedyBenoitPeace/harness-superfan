@@ -176,7 +176,7 @@ def codex_outputs(root: str, since=None, until=None, categories=None, session_fi
     """One dict per tool output, plus command run time per category."""
     out: list = []
     cmd_seconds: dict = {}
-    for path in files_touched_since(root, since):
+    for path in files_touched_since(root, since, until):
         meta = None
         start_ord = 0
         calls: dict = {}
@@ -261,7 +261,7 @@ def claude_outputs(root: str, prices: Prices | None = None, since=None, until=No
     out: list = []
     seconds: dict = {}
     seen_msgs: set = set()
-    for path in files_touched_since(root, since):
+    for path in files_touched_since(root, since, until):
         base = os.path.basename(path)
         in_sub = os.sep + "subagents" + os.sep in path and base.startswith("agent-")
         file_agent = base[len("agent-"):-len(".jsonl")] if in_sub else None
@@ -333,7 +333,7 @@ def copilot_outputs(root: str, since=None, until=None, categories=None) -> tuple
     lines). Run time is tool start to tool complete."""
     out: list = []
     seconds: dict = {}
-    for path in copilot_files(root, since):
+    for path in copilot_files(root, since, until):
         folder = os.path.dirname(path)
         sid, project = os.path.basename(folder), None
         threads: dict = {}

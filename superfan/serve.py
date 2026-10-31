@@ -2,7 +2,8 @@
 
 Listens on 127.0.0.1 only and reads log folders as the user running it.
 The only files it writes or deletes are reviews, in the reviews folder
-(~/.superfan/reviews by default, outside any repository). The only thing that
+(~/.superfan/reviews by default, outside any repository), and a cache of
+run-report checks (~/.superfan/report-checks.json: numbers and file names only). The only thing that
 leaves the machine is the optional "Ask" or "Run review" request, which sends
 numbers and command names (no transcript) to the local `claude` or `codex` CLI,
 only when you press it.
@@ -22,35 +23,97 @@ from .parse import scan, Prices
 from .breakdown import codex_outputs, claude_outputs, copilot_outputs, summarise
 from . import rules, advice, review
 
+def default_cache() -> str:
+    """Report checks already done, so a restart doesn't redo them. Outside any repository."""
+    return os.path.expanduser(os.environ.get("SUPERFAN_CACHE") or "~/.superfan/report-checks.json")
+
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 PAGE = os.path.join(HERE, "web", "index.html")
 
 
-def run_once(cfg: dict, days: float, until: datetime | None = None) -> tuple[dict, dict]:
+class Progress:
+    """What a run is doing right now, for the page to show while it waits."""
+
+    STEPS = [("claude", "Claude Code logs"), ("codex", "Codex logs"), ("copilot", "Copilot logs"),
+             ("reports", "Run reports"), ("outputs", "Tool outputs")]
+
+    def __init__(self, cfg: dict | None = None):
+        cfg = cfg or {}
+        self.lock = threading.Lock()
+        self.started = time.time()
+        self.steps = [{"key": k, "label": label, "status": "waiting", "seconds": None, "note": ""}
+                      for k, label in self.STEPS
+                      if k in ("reports", "outputs") or cfg.get(k)]
+
+    def run(self, key: str, fn, note=None):
+        step = next((s for s in self.steps if s["key"] == key), None)
+        if step is None:
+            return fn()
+        with self.lock:
+            step["status"], step["since"] = "running", time.time()
+        try:
+            out = fn()
+        except Exception:
+            with self.lock:
+                step["status"] = "failed"
+            raise
+        with self.lock:
+            step["status"], step["seconds"] = "done", round(time.time() - step.pop("since"), 1)
+            step["note"] = note(out) if note else ""
+        return out
+
+    def snapshot(self) -> dict:
+        with self.lock:
+            now = time.time()
+            steps = [{k: v for k, v in s.items() if k != "since"} | (
+                {"seconds": round(now - s["since"], 1)} if s["status"] == "running" else {}) for s in self.steps]
+        return {"elapsed": round(time.time() - self.started, 1), "steps": steps}
+
+
+def _n(word: str):
+    return lambda xs: f"{len(xs)} {word}{'' if len(xs) == 1 else 's'}"
+
+
+def run_once(cfg: dict, days: float, until: datetime | None = None,
+             progress: Progress | None = None) -> tuple[dict, dict]:
     """Returns (result for the page, tool outputs per session for drill-downs)."""
+    progress = progress or Progress(cfg)
     until = until or datetime.now(timezone.utc)
     since = until - timedelta(days=days)
     started = time.time()
-    sessions = scan(cfg["claude"], cfg["codex"], cfg["prices"], since, until, cfg.get("copilot"))
+    missing = [k for k in ("claude", "codex", "copilot") if cfg.get(k) and not os.path.isdir(cfg[k])]
+    roots = {k: cfg.get(k) if cfg.get(k) and k not in missing else None for k in ("claude", "codex", "copilot")}
+    sessions = []
+    for k in ("claude", "codex", "copilot"):
+        if roots[k]:
+            sessions += progress.run(k, lambda k=k: scan(roots["claude"] if k == "claude" else None,
+                                                         roots["codex"] if k == "codex" else None, cfg["prices"],
+                                                         since, until, roots["copilot"] if k == "copilot" else None),
+                                     _n("session"))
     sessions.sort(key=lambda r: -r["tokens"]["total"])
     findings = rules.orchestrator_share(sessions, cfg["orchestrator_limit"])
     findings += rules.frequent_compaction(sessions) + rules.tool_definitions(sessions)
-    findings += rules.report_vs_logs(cfg["reports"], cfg["codex"], cfg["claude"], cfg["prices"], cfg["tz"],
-                                     copilot_root=cfg.get("copilot"))
-    missing = [k for k in ("claude", "codex", "copilot") if cfg.get(k) and not os.path.isdir(cfg[k])]
-    outs, breakdown = [], {}
-    if cfg["codex"] and "codex" not in missing:
-        o, secs = codex_outputs(cfg["codex"], since, until)
-        outs += o
-        breakdown["codex"] = summarise(o, secs)
-    if cfg["claude"] and "claude" not in missing:
-        o, secs = claude_outputs(cfg["claude"], Prices(cfg["prices"]), since, until)
-        outs += o
-        breakdown["claude-code"] = summarise(o, secs)
-    if cfg.get("copilot") and "copilot" not in missing:
-        o, secs = copilot_outputs(cfg["copilot"], since, until)
-        outs += o
-        breakdown["copilot"] = summarise(o, secs)
+    findings += progress.run("reports", lambda: rules.report_vs_logs(
+        cfg["reports"], roots["codex"], roots["claude"], cfg["prices"], cfg["tz"], copilot_root=roots["copilot"],
+        since=since, until=until, cache_file=cfg.get("cache") or default_cache()), _n("finding"))
+
+    def tool_outputs():
+        outs, breakdown = [], {}
+        if roots["codex"]:
+            o, secs = codex_outputs(roots["codex"], since, until)
+            outs += o
+            breakdown["codex"] = summarise(o, secs)
+        if roots["claude"]:
+            o, secs = claude_outputs(roots["claude"], Prices(cfg["prices"]), since, until)
+            outs += o
+            breakdown["claude-code"] = summarise(o, secs)
+        if roots["copilot"]:
+            o, secs = copilot_outputs(roots["copilot"], since, until)
+            outs += o
+            breakdown["copilot"] = summarise(o, secs)
+        return outs, breakdown
+    outs, breakdown = progress.run("outputs", tool_outputs, lambda r: _n("tool call")(r[0]))
     for b in breakdown.values():
         b.pop("by_session", None)
     findings += rules.large_outputs([(o["session"], o["agent"], o["label"], o["tokens"], o["calls_after"]) for o in outs],
@@ -75,12 +138,35 @@ def run_once(cfg: dict, days: float, until: datetime | None = None) -> tuple[dic
 
 
 def make_handler(cfg: dict):
-    state = {"last": None, "outputs": {}, "lock": threading.Lock()}
+    state = {"last": None, "outputs": {}, "lock": threading.Lock(), "job": None, "jobs": threading.Lock()}
     allowed_hosts = {f"127.0.0.1:{cfg['port']}", f"localhost:{cfg['port']}"}
 
     def find(sid: str):
         last = state["last"] or {}
         return next((s for s in last.get("sessions", []) if s["session_id"] == sid), None)
+
+    def start_run(days: float, until: datetime | None, day: str | None) -> dict:
+        """Starts a run in the background, or joins the one already running for the same window."""
+        with state["jobs"]:
+            job = state["job"]
+            if job and not job["done"].is_set() and job["key"] == (days, day):
+                return job
+            job = {"key": (days, day), "progress": Progress(cfg), "done": threading.Event(), "error": None}
+            state["job"] = job
+
+        def work():
+            with state["lock"]:  # one run at a time; a newer request waits for the older one
+                job["progress"].started = time.time()
+                try:
+                    last, outputs = run_once(cfg, days, until, job["progress"])
+                    last["day"] = day
+                    state["last"], state["outputs"] = last, outputs
+                except Exception as e:  # show the error on the page instead of a dead request
+                    job["error"] = repr(e)
+                finally:
+                    job["done"].set()
+        threading.Thread(target=work, daemon=True).start()
+        return job
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):  # keep the terminal quiet
@@ -92,7 +178,10 @@ def make_handler(cfg: dict):
             self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(body)
+            try:
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # the browser left (reload, closed tab) before the answer was ready
 
         def _json(self, code: int, obj) -> None:
             self._send(code, json.dumps(obj, default=str).encode(), "application/json")
@@ -113,6 +202,12 @@ def make_handler(cfg: dict):
                     return self._send(200, fh.read(), "text/html; charset=utf-8")
             if url.path == "/api/last":
                 return self._json(200, state["last"] or {})
+            if url.path == "/api/progress":
+                job = state["job"]
+                if not job:
+                    return self._json(200, {"running": False})
+                return self._json(200, {"running": not job["done"].is_set(), "error": job["error"],
+                                        **job["progress"].snapshot()})
             if url.path == "/api/session":
                 sid = q.get("id", [""])[0]
                 s = find(sid)
@@ -160,12 +255,10 @@ def make_handler(cfg: dict):
                     except ValueError:
                         return self._json(400, {"error": "Dates must look like 2026-10-16."})
                     days = 1.0
-                with state["lock"]:
-                    try:
-                        state["last"], state["outputs"] = run_once(cfg, days, until)
-                    except Exception as e:  # show the error on the page instead of a dead request
-                        return self._json(500, {"error": repr(e)})
-                    state["last"]["day"] = str(day) if day else None
+                job = start_run(days, until, str(day) if day else None)
+                job["done"].wait()
+                if job["error"]:
+                    return self._json(500, {"error": job["error"]})
                 return self._json(200, state["last"])
             if url.path == "/api/review":
                 # The same review as `superfan review`: numbers computed here, summary by a model, saved to disk.
@@ -234,11 +327,15 @@ def make_handler(cfg: dict):
                 return self._json(200, {"answer": answer})
             self._send(404, b"not found", "text/plain")
 
+    Handler.start_run = staticmethod(start_run)
     return Handler
 
 
 def serve(cfg: dict) -> None:
-    httpd = ThreadingHTTPServer(("127.0.0.1", cfg["port"]), make_handler(cfg))
+    handler = make_handler(cfg)
+    httpd = ThreadingHTTPServer(("127.0.0.1", cfg["port"]), handler)
+    httpd.daemon_threads = True
+    handler.start_run(7.0, None, None)  # start reading now, so the page has something sooner
     print(f"Harness Superfan on http://127.0.0.1:{cfg['port']}  (Ctrl+C to stop)")
     for k in ("claude", "codex", "copilot"):
         print(f"  {k:<7} {cfg.get(k) or '(off)'}")

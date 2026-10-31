@@ -223,7 +223,9 @@ def in_window(ts: datetime | None, since: datetime | None, until: datetime | Non
     return True
 
 
-def files_touched_since(root: str, since: datetime | None) -> list[str]:
+def files_touched_since(root: str, since: datetime | None, until: datetime | None = None) -> list[str]:
+    """Log files written to at or after `since`. `until` is accepted for symmetry but not used:
+    a file's creation time says nothing about its events when logs were copied or restored."""
     out = []
     for dirpath, _dirs, names in os.walk(root):
         for n in names:
@@ -246,7 +248,7 @@ def scan_claude(root: str, prices: Prices, since=None, until=None) -> dict[str, 
     seen_tools: set = set()
     labels: dict[str, str] = {}  # agentId -> subagent type, from the parent's tool results
 
-    for path in files_touched_since(root, since):
+    for path in files_touched_since(root, since, until):
         file_agent = None
         base = os.path.basename(path)
         if os.sep + "subagents" + os.sep in path and base.startswith("agent-"):
@@ -342,7 +344,7 @@ def scan_codex(root: str, since=None, until=None) -> dict[str, Session]:
     thread. A subagent file starts with a copy of its parent's history; only
     lines from subagent_history_start_ordinal on belong to the subagent."""
     sessions: dict[str, Session] = {}
-    for path in files_touched_since(root, since):
+    for path in files_touched_since(root, since, until):
         meta = None
         start_ord = 0
         thread_id = None
@@ -436,9 +438,9 @@ def copilot_workspace(folder: str) -> dict:
     return out
 
 
-def copilot_files(root: str, since: datetime | None) -> list[str]:
+def copilot_files(root: str, since: datetime | None, until: datetime | None = None) -> list[str]:
     """<root>/<session uuid>/events.jsonl, or root itself when it is one session folder."""
-    return [p for p in files_touched_since(root, since) if os.path.basename(p) == "events.jsonl"]
+    return [p for p in files_touched_since(root, since, until) if os.path.basename(p) == "events.jsonl"]
 
 
 def copilot_project(folder: str, first: dict | None) -> str:
@@ -482,7 +484,7 @@ def scan_copilot(root: str, since=None, until=None) -> dict[str, Session]:
     the last one in the window minus the last one before it.
     Tokens only: AI credits are never read."""
     sessions: dict[str, Session] = {}
-    for path in copilot_files(root, since):
+    for path in copilot_files(root, since, until):
         folder = os.path.dirname(path)
         sid = os.path.basename(folder)
         s = None
