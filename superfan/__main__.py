@@ -94,7 +94,8 @@ def cmd_check(a: argparse.Namespace) -> int:
     sessions = scan(a.claude, a.codex, prices, since, until, a.copilot)
     findings = rules.orchestrator_share(sessions, a.orchestrator_limit)
     findings += rules.frequent_compaction(sessions) + rules.tool_definitions(sessions)
-    findings += rules.report_vs_logs(rules.report_dirs(a.reports or []), a.codex, a.claude, prices, _tz(a.tz), copilot_root=a.copilot)
+    findings += rules.report_vs_logs(rules.report_dirs(a.reports or []), a.codex, a.claude, prices, _tz(a.tz), copilot_root=a.copilot,
+                                     since=since, until=until)
     findings += rules.large_outputs(_outputs(a, prices, since, until), a.output_limit)
     print(json.dumps(findings, indent=1, default=str))
     return 0
@@ -125,7 +126,8 @@ def cmd_report(a: argparse.Namespace) -> int:
               f"orchestration {r['orchestration_share']:.0%}, {r['subagents']} subagents")
     findings = rules.orchestrator_share(rows, a.orchestrator_limit)
     findings += rules.frequent_compaction(rows) + rules.tool_definitions(rows)
-    findings += rules.report_vs_logs(rules.report_dirs(a.reports or []), a.codex, a.claude, prices, _tz(a.tz), copilot_root=a.copilot)
+    findings += rules.report_vs_logs(rules.report_dirs(a.reports or []), a.codex, a.claude, prices, _tz(a.tz), copilot_root=a.copilot,
+                                     since=since, until=until)
     findings += rules.large_outputs(_outputs(a, prices, since, until), a.output_limit)
     print("\nHealth rules:")
     if not findings:

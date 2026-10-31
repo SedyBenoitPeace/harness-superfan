@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass, field, asdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Iterable
 
 TOKEN_KEYS = ("input", "cache_read", "cache_write", "output")
@@ -223,15 +223,22 @@ def in_window(ts: datetime | None, since: datetime | None, until: datetime | Non
     return True
 
 
-def files_touched_since(root: str, since: datetime | None) -> list[str]:
+def files_touched_since(root: str, since: datetime | None, until: datetime | None = None) -> list[str]:
+    """Log files written to at or after `since`. With `until`, also drops files created
+    after it (where the OS records creation time, as macOS does): they can't hold older events."""
     out = []
     for dirpath, _dirs, names in os.walk(root):
         for n in names:
             if not n.endswith(".jsonl"):
                 continue
             p = os.path.join(dirpath, n)
-            if since is None or datetime.fromtimestamp(os.path.getmtime(p), timezone.utc) >= since:
-                out.append(p)
+            st = os.stat(p)
+            if since is not None and datetime.fromtimestamp(st.st_mtime, timezone.utc) < since:
+                continue
+            born = getattr(st, "st_birthtime", None)
+            if until is not None and born and datetime.fromtimestamp(born, timezone.utc) > until + timedelta(minutes=1):
+                continue
+            out.append(p)
     return sorted(out)
 
 
@@ -246,7 +253,7 @@ def scan_claude(root: str, prices: Prices, since=None, until=None) -> dict[str, 
     seen_tools: set = set()
     labels: dict[str, str] = {}  # agentId -> subagent type, from the parent's tool results
 
-    for path in files_touched_since(root, since):
+    for path in files_touched_since(root, since, until):
         file_agent = None
         base = os.path.basename(path)
         if os.sep + "subagents" + os.sep in path and base.startswith("agent-"):
@@ -342,7 +349,7 @@ def scan_codex(root: str, since=None, until=None) -> dict[str, Session]:
     thread. A subagent file starts with a copy of its parent's history; only
     lines from subagent_history_start_ordinal on belong to the subagent."""
     sessions: dict[str, Session] = {}
-    for path in files_touched_since(root, since):
+    for path in files_touched_since(root, since, until):
         meta = None
         start_ord = 0
         thread_id = None
@@ -436,9 +443,9 @@ def copilot_workspace(folder: str) -> dict:
     return out
 
 
-def copilot_files(root: str, since: datetime | None) -> list[str]:
+def copilot_files(root: str, since: datetime | None, until: datetime | None = None) -> list[str]:
     """<root>/<session uuid>/events.jsonl, or root itself when it is one session folder."""
-    return [p for p in files_touched_since(root, since) if os.path.basename(p) == "events.jsonl"]
+    return [p for p in files_touched_since(root, since, until) if os.path.basename(p) == "events.jsonl"]
 
 
 def copilot_project(folder: str, first: dict | None) -> str:
@@ -482,7 +489,7 @@ def scan_copilot(root: str, since=None, until=None) -> dict[str, Session]:
     the last one in the window minus the last one before it.
     Tokens only: AI credits are never read."""
     sessions: dict[str, Session] = {}
-    for path in copilot_files(root, since):
+    for path in copilot_files(root, since, until):
         folder = os.path.dirname(path)
         sid = os.path.basename(folder)
         s = None

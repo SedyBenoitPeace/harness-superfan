@@ -70,7 +70,12 @@ python3 -m superfan serve --reports ~/src ~/work   # folders of projects
 
 Opens `http://127.0.0.1:8765` with a **Refresh** button (re-reads the logs for the current window and keeps the filter; a run older than 5 minutes refreshes on page load), a window picker
 (24 hours to 90 days) and a harness filter (All, Claude Code, Codex, Copilot) that
-applies to the whole page:
+applies to the whole page. Reading starts as soon as `serve` starts, and while
+a run is going the page shows each source (Claude Code, Codex, Copilot, run
+reports, tool outputs) with its time so far. The report-vs-logs check covers the
+reports whose run falls in the window, and keeps its results in
+`~/.superfan/report-checks.json` (or `$SUPERFAN_CACHE`) so it is done once per report.
+
 
 - Summary cards; click one for its detail (sessions per day, token mix and
   models, Claude Code spend by token kind, model and project, tokens by role,

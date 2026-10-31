@@ -3,6 +3,7 @@ evidence and why it matters. Thresholds are arguments so they can be tuned."""
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -61,7 +62,17 @@ def _commit_time(repo: str, ref: str) -> datetime | None:
         return None
 
 
+_parsed: dict = {}  # (path, mtime, tz) -> parsed report; parsing asks git for two commit times
+
+
 def parse_run_report(path: str, tz: timezone) -> dict:
+    key = (path, os.path.getmtime(path), tz)
+    if key not in _parsed:
+        _parsed[key] = _parse_run_report(path, tz)
+    return {**_parsed[key], "problems": list(_parsed[key]["problems"])}
+
+
+def _parse_run_report(path: str, tz: timezone) -> dict:
     with open(path, encoding="utf-8") as fh:
         text = fh.read()
     rep = {"path": os.path.basename(path), "problems": []}
@@ -118,23 +129,71 @@ def same_project(session_project: str, project: str) -> bool:
     return session_project == project or bool(re.fullmatch(re.escape(project) + r"-[A-Za-z]+\d+-\d+", session_project or ""))
 
 
+_report_cache: dict = {}  # key -> findings; a finished run's logs don't change
+
+
+def _load_cache(cache_file: str | None) -> None:
+    if not cache_file or _report_cache.get(("loaded", cache_file)):
+        return
+    _report_cache[("loaded", cache_file)] = True
+    try:
+        with open(cache_file, encoding="utf-8") as fh:
+            _report_cache.update(json.load(fh))
+    except (OSError, ValueError):
+        pass
+
+
+def _save_cache(cache_file: str | None) -> None:
+    if not cache_file:
+        return
+    try:
+        os.makedirs(os.path.dirname(cache_file), exist_ok=True)
+        with open(cache_file + ".tmp", "w", encoding="utf-8") as fh:
+            json.dump({k: v for k, v in _report_cache.items() if isinstance(k, str)}, fh)
+        os.replace(cache_file + ".tmp", cache_file)
+    except OSError:
+        pass
+
+
 def report_vs_logs(report_dirs: list, codex_root=None, claude_root=None, prices=None,
-                   tz: timezone = timezone.utc, tolerance: float = 0.10, copilot_root=None) -> list:
-    """A run report should agree with the session logs for the same window."""
-    out = []
+                   tz: timezone = timezone.utc, tolerance: float = 0.10, copilot_root=None,
+                   since: datetime | None = None, until: datetime | None = None,
+                   cache_file: str | None = None) -> list:
+    """A run report should agree with the session logs for the same window.
+    With since/until, only reports whose run overlaps that window are checked
+    (a report with no Start/End counts by its file time). Each check re-reads the
+    logs for the report's window, so results are kept per report file and mtime,
+    in memory and, with cache_file, on disk across restarts."""
+    _load_cache(cache_file)
+    out, added = [], False
     for d in report_dirs:
         if not os.path.isdir(d):
             continue
         for name in sorted(os.listdir(d)):
-            if name.endswith(".md"):
-                out += check_report(os.path.join(d, name), codex_root, claude_root, prices, tz, tolerance, copilot_root)
+            if not name.endswith(".md"):
+                continue
+            path = os.path.join(d, name)
+            st = os.stat(path)
+            key = json.dumps([path, st.st_mtime, st.st_size, codex_root, copilot_root, tolerance])
+            if key not in _report_cache:
+                rep = parse_run_report(path, tz)
+                if since or until:
+                    mtime = datetime.fromtimestamp(st.st_mtime, timezone.utc)
+                    start, end = rep.get("start", mtime), rep.get("end", mtime)
+                    if (until and start > until) or (since and end < since):
+                        continue
+                _report_cache[key] = check_report(path, codex_root, claude_root, prices, tz, tolerance, copilot_root, rep)
+                added = True
+            out += _report_cache[key]
+    if added:
+        _save_cache(cache_file)
     return out
 
 
 def check_report(path: str, codex_root=None, claude_root=None, prices=None,
-                 tz: timezone = timezone.utc, tolerance: float = 0.10, copilot_root=None) -> list:
+                 tz: timezone = timezone.utc, tolerance: float = 0.10, copilot_root=None, rep=None) -> list:
     """R2 for one run report (docs/runs/<name>.md); its project is the folder above docs/."""
-    rep = parse_run_report(path, tz)
+    rep = rep or parse_run_report(path, tz)
     problems = list(rep["problems"])
     # windows come from commit times to the minute; too short to compare reliably
     if "tokens" in rep and "start" in rep and (codex_root or copilot_root) and rep["end"] - rep["start"] >= timedelta(minutes=5):
