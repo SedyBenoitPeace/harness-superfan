@@ -21,7 +21,7 @@ from urllib.parse import parse_qs, urlparse
 
 from .parse import scan, Prices
 from .breakdown import codex_outputs, claude_outputs, copilot_outputs, summarise
-from . import rules, advice, review
+from . import rules, advice, review, live
 
 def default_cache() -> str:
     """Report checks already done, so a restart doesn't redo them. Outside any repository."""
@@ -30,6 +30,9 @@ def default_cache() -> str:
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PAGE = os.path.join(HERE, "web", "index.html")
+LIVE_PAGE = os.path.join(HERE, "web", "live.html")
+STREAM_TICK_S = 1.0
+STREAM_PING_S = 15.0
 
 
 class Progress:
@@ -140,6 +143,7 @@ def run_once(cfg: dict, days: float, until: datetime | None = None,
 def make_handler(cfg: dict):
     state = {"last": None, "outputs": {}, "lock": threading.Lock(), "job": None, "jobs": threading.Lock()}
     allowed_hosts = {f"127.0.0.1:{cfg['port']}", f"localhost:{cfg['port']}"}
+    watch = live.Live(cfg)
 
     def find(sid: str):
         last = state["last"] or {}
@@ -186,6 +190,39 @@ def make_handler(cfg: dict):
         def _json(self, code: int, obj) -> None:
             self._send(code, json.dumps(obj, default=str).encode(), "application/json")
 
+        def _stream(self, w) -> None:
+            """Server-Sent Events: a new view whenever the session's files change,
+            the state every few seconds, a ping so a closed tab is noticed."""
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Accel-Buffering", "no")
+            self.end_headers()
+            sent_version, sent_state, last_write = -1, None, 0.0
+            try:
+                while True:
+                    snap = w.snapshot()
+                    now = time.time()
+                    if snap is None:
+                        msg = {"error": "No such session in the last day's logs."}
+                        self.wfile.write(b"event: missing\ndata: " + json.dumps(msg).encode() + b"\n\n")
+                        self.wfile.flush()
+                        return
+                    st = (snap["state"]["state"], snap["state"]["by"])
+                    if w.version != sent_version:
+                        self.wfile.write(b"event: view\ndata: " + json.dumps(snap, default=str).encode() + b"\n\n")
+                        sent_version, sent_state, last_write = w.version, st, now
+                    elif st != sent_state:
+                        self.wfile.write(b"event: state\ndata: " + json.dumps(snap["state"]).encode() + b"\n\n")
+                        sent_state, last_write = st, now
+                    elif now - last_write >= STREAM_PING_S:
+                        self.wfile.write(b"event: ping\ndata: {}\n\n")
+                        last_write = now
+                    self.wfile.flush()
+                    time.sleep(STREAM_TICK_S)
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
+                return  # the tab went away
+
         def _host_ok(self) -> bool:
             if self.headers.get("Host") not in allowed_hosts:  # refuse DNS-rebinding requests
                 self._send(403, b"forbidden", "text/plain")
@@ -200,6 +237,20 @@ def make_handler(cfg: dict):
             if url.path == "/":
                 with open(PAGE, "rb") as fh:
                     return self._send(200, fh.read(), "text/html; charset=utf-8")
+            if url.path == "/live":
+                with open(LIVE_PAGE, "rb") as fh:
+                    return self._send(200, fh.read(), "text/html; charset=utf-8")
+            if url.path == "/api/live":
+                return self._json(200, watch.overview())
+            if url.path in ("/api/live/session", "/api/live/stream"):
+                h, sid = q.get("h", [""])[0], q.get("id", [""])[0]
+                if h not in live.HARNESSES or not sid:
+                    return self._json(400, {"error": "Say which session: ?h=claude-code|codex|copilot&id=..."})
+                w = watch.watcher(h, sid)
+                if url.path == "/api/live/session":
+                    snap = w.snapshot()
+                    return self._json(200, snap) if snap else self._json(404, {"error": "No such session in the last day's logs."})
+                return self._stream(w)
             if url.path == "/api/last":
                 return self._json(200, state["last"] or {})
             if url.path == "/api/progress":

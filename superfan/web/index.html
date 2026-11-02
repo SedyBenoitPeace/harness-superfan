@@ -156,6 +156,13 @@ input { font: inherit; color: var(--ink); background: var(--surface); border: 1p
 .rvlist button[aria-current="true"] { border-color: var(--ink); box-shadow: inset 3px 0 0 var(--ink); }
 .rvlist small { color: var(--ink-2); }
 .answer h3 { font-size: 14px; margin: 12px 0 4px; } .answer h2 { font-size: 16px; margin: 0 0 6px; }
+.live { display: grid; gap: 6px; }
+.live a { display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap; padding: 8px 10px; border: 1px solid var(--ring); border-radius: 10px; text-decoration: none; }
+.live a:hover { background: var(--hover); }
+.ldot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--warning); margin-right: 4px; vertical-align: 0; }
+.ldot.working { background: var(--good); animation: lpulse 1.4s ease-in-out infinite; }
+@keyframes lpulse { 50% { opacity: .3; } }
+@media (prefers-reduced-motion: reduce) { .ldot.working { animation: none; } }
 @media (max-width: 640px) {
   .hide-sm { display: none; }
   .bars { grid-template-columns: 130px 1fr 56px; } .bars .t, .bars .u { display: none; }
@@ -231,6 +238,10 @@ input { font: inherit; color: var(--ink); background: var(--surface); border: 1p
     </section>
   </div>
   <div id="tab-sessions">
+  <section class="card" id="live-now" hidden>
+    <div class="row"><div><h2>Live now</h2><div class="sub" id="live-sub"></div></div><a class="sub" href="/live">Live screen →</a></div>
+    <div class="live" id="live-list"></div>
+  </section>
   <section class="tiles" id="tiles"></section>
   <section class="card" id="tile-detail" hidden></section>
 
@@ -399,9 +410,27 @@ const TILE = {
 /* ---------- sessions & projects ---------- */
 const SESS_HEAD = (first, third) => `<thead><tr><th>${first}</th><th>Harness</th><th>${third}</th><th class="hide-sm">${third === "Project" ? "Session" : "Models"}</th><th class="num">Tokens</th>
   <th class="num">$</th><th class="num hide-sm">Active</th><th class="num hide-sm">Calls</th><th>Token split</th></tr></thead>`;
+const LSTATE = { working: "Working", waiting: "Open, waiting", idle: "Idle" };
+let liveNow = new Map();
+const liveDot = (s) => { const l = liveNow.get(s.harness + "|" + s.session_id); return l ? `<span class="ldot ${esc(l.state)}" title="${esc(LSTATE[l.state] || l.state)}"></span>` : ""; };
+const liveAgo = (iso) => { const x = Math.max(0, (Date.now() - new Date(iso)) / 1000); return x < 60 ? Math.round(x) + "s" : x < 3600 ? Math.round(x / 60) + "m" : (x / 3600).toFixed(1) + "h"; };
+async function pollLive() {
+  try {
+    const j = await (await fetch("/api/live")).json(), before = [...liveNow.keys()].sort().join();
+    liveNow = new Map(j.sessions.map((x) => [x.harness + "|" + x.session_id, x]));
+    const ss = j.sessions.filter((x) => harness === "all" || x.harness === harness);
+    $("#live-now").hidden = !j.sessions.length;
+    $("#live-sub").textContent = `${ss.length} open · ${j.process_check === "off" ? "from log file times" : "from running processes and log file times"} · updates every 10 s`;
+    $("#live-list").innerHTML = ss.map((x) => `<a href="/live?h=${encodeURIComponent(x.harness)}&id=${encodeURIComponent(x.session_id)}">
+      <span>${htag(x.harness)} <b>${esc(x.project)}</b> <span class="mono muted">${esc(x.session_id.slice(0, 8))}</span></span>
+      <span class="sub"><span class="ldot ${esc(x.state)}"></span>${esc(LSTATE[x.state] || x.state)} · last write ${liveAgo(x.last)} ago · Watch →</span></a>`).join("") || `<div class="sub">Nothing open for this harness.</div>`;
+    if (data && before !== [...liveNow.keys()].sort().join()) sessions();
+  } catch (e) {}
+}
+pollLive(); setInterval(pollLive, 10000);
 function sessRow(s, i, child) {
   const id = s.session_id, isOpen = open.has("s:" + id);
-  let h = `<tr class="click ${child ? "child" : ""}" data-key="s:${esc(id)}" id="row-${esc(id)}"><td><span class="caret">${isOpen ? "▾" : "▸"}</span>${child ? "" : i + 1}</td>
+  let h = `<tr class="click ${child ? "child" : ""}" data-key="s:${esc(id)}" id="row-${esc(id)}"><td><span class="caret">${isOpen ? "▾" : "▸"}</span>${child ? "" : i + 1} ${liveDot(s)}</td>
     <td>${htag(s.harness)}</td><td>${child ? `<span class="mono">${esc(id.slice(0, 8))}</span> <span class="muted">${esc(when(s.start))}</span>` : `${esc(s.project)} <span class="muted">${esc(when(s.start))}</span>`}</td>
     <td class="mono hide-sm">${child ? esc(s.models.join(", ")) : esc(id.slice(0, 8))}</td><td class="num">${tok(s.tokens.total)}</td>
     <td class="num">${usd(s.cost_usd)}</td><td class="num hide-sm">${dur(s.active_s)}</td><td class="num hide-sm">${s.model_calls}</td><td>${roleSplit(s.agents)}</td></tr>`;
@@ -711,7 +740,7 @@ function goto(sid) {
   const el = document.getElementById("row-" + sid); if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 function setHarness(h) {
-  harness = h; showAll = false;
+  harness = h; showAll = false; pollLive();
   document.querySelectorAll("#harness button").forEach((x) => x.setAttribute("aria-pressed", x.dataset.h === h)); render();
 }
 

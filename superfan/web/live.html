@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Superfan Live</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --ring: rgba(11,11,11,0.10); --hover: #f0efea;
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a;          /* roles: orchestrator, approval reviewer, subagents */
+  --h-cc: #6250d6; --h-cx: #eda100; --h-gh: #c2418f;      /* harnesses: Claude Code, Codex, Copilot */
+  --good: #0ca30c; --warning: #fab219; --serious: #ec835a; --critical: #d03b3b;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10); --hover: #222221;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --h-cc: #9085e9; --h-cx: #c98500; --h-gh: #d65ba3;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10); --hover: #222221;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --h-cc: #9085e9; --h-cx: #c98500; --h-gh: #d65ba3;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 1180px; margin: 0 auto; padding: 24px 16px 64px; }
+header { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+h1 { font-size: 20px; margin: 0; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+h2 { font-size: 15px; margin: 0 0 8px; }
+a { color: inherit; }
+.sub { color: var(--ink-2); font-size: 13px; }
+.muted { color: var(--muted); }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.card { background: var(--surface); border: 1px solid var(--ring); border-radius: 12px; padding: 16px; margin-bottom: 16px; min-width: 0; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.tile { background: var(--surface); border: 1px solid var(--ring); border-radius: 12px; padding: 14px 16px; }
+.tile .label { color: var(--ink-2); font-size: 12px; }
+.tile .value { font-size: 26px; font-weight: 600; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.tile .note { color: var(--muted); font-size: 12px; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; }
+table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--grid); vertical-align: middle; }
+th { color: var(--ink-2); font-weight: 500; font-size: 12px; }
+td.num, th.num { text-align: right; white-space: nowrap; }
+.scroll { overflow-x: auto; }
+.tag { display: inline-flex; gap: 5px; align-items: center; font-size: 11px; padding: 1px 6px; border-radius: 6px; border: 1px solid var(--axis); color: var(--ink-2); white-space: nowrap; font-weight: 400; }
+.tag i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; }
+.state { display: inline-flex; gap: 6px; align-items: center; font-size: 12px; font-weight: 600; padding: 2px 10px; border-radius: 999px; border: 1px solid var(--axis); }
+.state .d { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.state.working { border-color: var(--good); } .state.working .d { background: var(--good); animation: pulse 1.4s ease-in-out infinite; }
+.state.waiting .d, .state.idle .d { background: var(--warning); }
+.state.ended .d { background: var(--axis); }
+@keyframes pulse { 50% { opacity: .3; } }
+@media (prefers-reduced-motion: reduce) { .state.working .d { animation: none; } }
+.spark { display: flex; align-items: flex-end; gap: 2px; height: 64px; }
+.spark span { flex: 1; background: var(--s1); border-radius: 2px 2px 0 0; min-height: 1px; }
+.spark span.z { background: var(--grid); }
+.axis { display: flex; justify-content: space-between; color: var(--muted); font-size: 11px; margin-top: 4px; }
+.gauge { height: 10px; background: var(--grid); border-radius: 5px; overflow: hidden; margin: 8px 0 4px; }
+.gauge span { display: block; height: 100%; background: var(--s1); }
+.role { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; }
+.flag { border: 1px solid var(--ring); border-left: 3px solid var(--serious); border-radius: 8px; padding: 8px 12px; margin-bottom: 8px; font-size: 13px; }
+.flag b { display: block; }
+.flag p { margin: 2px 0; color: var(--ink-2); }
+.pick { display: grid; gap: 8px; }
+.pick a { display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap; padding: 10px 12px; border: 1px solid var(--ring); border-radius: 10px; text-decoration: none; background: var(--surface); }
+.pick a:hover { background: var(--hover); }
+.empty { color: var(--ink-2); padding: 16px 0; text-align: center; }
+.err { color: var(--critical); }
+.bars { display: grid; grid-template-columns: minmax(110px, 200px) 1fr 70px; gap: 6px 10px; align-items: center; font-size: 13px; }
+.bars .b { height: 10px; background: var(--s1); border-radius: 0 3px 3px 0; min-width: 2px; }
+.bars .n { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink-2); }
+.tip { border: 1px solid var(--ring); border-left: 3px solid var(--serious); border-radius: 8px; padding: 8px 12px; margin-bottom: 8px; font-size: 13px; }
+.tip b { display: block; } .tip p { margin: 2px 0; color: var(--ink-2); } .tip p span { color: var(--ink); font-weight: 600; }
+.new { animation: flash 1.2s ease-out; }
+@keyframes flash { from { background: var(--hover); } }
+@media (max-width: 640px) { .hide-sm { display: none; } .grid2 { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <div class="sub"><a href="/">← All sessions</a></div>
+      <h1 id="title">Live</h1>
+      <div class="sub" id="meta">Connecting…</div>
+    </div>
+    <div class="sub" id="conn"></div>
+  </header>
+  <div id="error" class="card err" hidden></div>
+  <div id="body"></div>
+</main>
+<script>
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const tok = (n) => n >= 1e9 ? (n / 1e9).toFixed(2) + "B" : n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? Math.round(n / 1e3) + "k" : String(Math.round(n || 0));
+const usd = (n) => n == null ? "—" : n < 0.01 && n > 0 ? "<$0.01" : "$" + n.toFixed(2);
+const pct = (x) => isFinite(x) ? Math.round(x * 100) + "%" : "—";
+const ago = (iso) => { if (!iso) return ""; const s = Math.max(0, (Date.now() - new Date(iso)) / 1000); return s < 60 ? Math.round(s) + "s ago" : s < 3600 ? Math.round(s / 60) + "m ago" : s < 172800 ? (s / 3600).toFixed(1) + "h ago" : Math.round(s / 86400) + "d ago"; };
+const clock = (iso) => iso ? new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "";
+const dur = (s) => { const m = Math.round((s || 0) / 60); return m >= 60 ? Math.floor(m / 60) + "h" + String(m % 60).padStart(2, "0") : m + "m"; };
+const HNAME = { "claude-code": "Claude Code", codex: "Codex", copilot: "Copilot" };
+const HCOL = { "claude-code": "--h-cc", codex: "--h-cx", copilot: "--h-gh" };
+const ROLE = { orchestrator: "Orchestrator", reviewer: "Approval reviewer", worker: "Subagent" };
+const RCOL = { orchestrator: "--s1", reviewer: "--s2", worker: "--s3" };
+const STATE = { working: "Working", waiting: "Open, waiting", idle: "Idle", ended: "Ended" };
+const htag = (h) => `<span class="tag"><i style="background:var(${HCOL[h] || "--muted"})"></i>${HNAME[h] || esc(h)}</span>`;
+const badge = (st) => `<span class="state ${esc(st.state)}" title="${esc(st.by || "")}"><span class="d"></span>${STATE[st.state] || esc(st.state)}</span>`;
+const q = new URLSearchParams(location.search), H = q.get("h"), ID = q.get("id");
+let view = null, lastMsg = 0, seenTools = new Set();
+
+function picker() {
+  $("#title").textContent = "Live sessions";
+  const load = async () => {
+    try {
+      const j = await (await fetch("/api/live")).json();
+      $("#meta").textContent = `Open right now. Updates every 10 s. Decided by ${j.process_check === "off" ? "log file times" : "running processes (" + j.process_check + ") and log file times"}.`;
+      $("#body").innerHTML = j.sessions.length ? `<div class="pick">` + j.sessions.map((s) =>
+        `<a href="/live?h=${encodeURIComponent(s.harness)}&id=${encodeURIComponent(s.session_id)}"><span>${htag(s.harness)} <b>${esc(s.project)}</b> <span class="mono muted">${esc(s.session_id.slice(0, 8))}</span></span>
+         <span>${badge(s)} <span class="sub">last write ${ago(s.last)}</span></span></a>`).join("") + `</div>`
+        : `<div class="card empty">No session is open right now. This page updates by itself.</div>`;
+    } catch (e) { $("#meta").textContent = "Superfan is not answering. Is serve still running?"; }
+  };
+  load(); setInterval(load, 10000);
+}
+
+function sparkline(b) {
+  const xs = b.tokens, max = Math.max(...xs, 1);
+  return `<div class="spark" role="img" aria-label="Tokens per minute, last 30 minutes">` + xs.map((v, i) =>
+    `<span class="${v ? "" : "z"}" style="height:${Math.max(v / max * 100, 2)}%" title="${30 - i} min ago: ${tok(v)} tokens${b.cost_usd ? ", " + usd(b.cost_usd[i]) : ""}"></span>`).join("") +
+    `</div><div class="axis"><span>30 min ago</span><span>now</span></div>`;
+}
+
+function render() {
+  const v = view, s = v.summary, cc = v.harness === "claude-code";
+  document.title = `${v.project} · Superfan Live`;
+  $("#title").innerHTML = `${esc(v.project)} ${htag(v.harness)} <span id="badge">${badge(v.state)}</span>`;
+  const workers = s.agents.filter((a) => a.role === "worker").length;
+  const ctxPct = v.context.max ? v.context.last / v.context.max : 0;
+  const tiles = [
+    ["Tokens so far", tok(s.tokens.total), `${tok(s.tokens.cache_read)} cache read · ${tok(s.tokens.output)} output`],
+    cc ? ["Cost so far", usd(s.cost_usd), "API list prices"] : ["Cost", "—", `${HNAME[v.harness]} is tokens only`],
+    ["Last 5 minutes", tok(v.burn.last5_tokens), cc ? usd(v.burn.last5_cost_usd) : "tokens"],
+    ["Orchestrator prompt", tok(v.context.last), `largest so far ${tok(v.context.max)}`],
+    ["Agents", String(1 + workers), `orchestrator + ${workers} subagent${workers === 1 ? "" : "s"} · ${pct(s.orchestration_share)} orchestration`],
+    ["Calls", String(s.model_calls), `${s.tool_calls} tool calls · active ${dur(s.active_s)}`],
+  ];
+  const agents = `<div class="scroll"><table><thead><tr><th>Agent</th><th class="hide-sm">Model</th><th class="num">Tokens</th><th class="num">Share</th>${cc ? `<th class="num">$</th>` : ""}<th class="num">Calls</th><th class="num hide-sm">Last prompt</th><th class="num">Last active</th></tr></thead><tbody>` +
+    s.agents.map((a) => `<tr><td><span class="role" style="background:var(${RCOL[a.role]})"></span>${ROLE[a.role] || esc(a.role)}${a.label ? ` <span class="muted">${esc(a.label)}</span>` : ""}</td>
+      <td class="mono hide-sm">${esc((a.models || []).join(", "))}</td><td class="num">${tok(a.tokens.total)}</td><td class="num">${pct(a.share)}</td>${cc ? `<td class="num">${usd(a.cost_usd)}</td>` : ""}
+      <td class="num">${a.model_calls}</td><td class="num hide-sm">${tok(a.last_context || 0)}</td><td class="num">${a.last ? ago(a.last) : ""}</td></tr>`).join("") + `</tbody></table></div>`;
+  const recent = v.recent.length ? `<div class="scroll"><table><thead><tr><th>Time</th><th>Agent</th><th>Tool</th><th>On</th></tr></thead><tbody>` +
+    [...v.recent].reverse().map((r) => { const k = r.ts + r.tool + r.target, fresh = seenTools.size && !seenTools.has(k); seenTools.add(k);
+      return `<tr class="${fresh ? "new" : ""}"><td class="mono">${esc(clock(r.ts))}</td><td><span class="role" style="background:var(${RCOL[r.role]})"></span>${ROLE[r.role] || esc(r.role)}</td><td class="mono">${esc(r.tool)}</td><td class="mono">${esc(r.target)}</td></tr>`; }).join("") +
+    `</tbody></table></div>` : `<div class="empty">No tool calls yet.</div>`;
+  const d = v.detail || {}, cats = Object.entries(d.categories || {}).slice(0, 6), cmax = Math.max(...cats.map(([, c]) => c.carried_tokens), 1);
+  const where = d.error ? `<div class="sub err">Could not read the breakdown: ${esc(d.error)}</div>` : !cats.length ? `<div class="sub">No tool outputs yet.</div>` :
+    `<div class="sub" style="margin-bottom:8px">Tokens each kind of tool output costs, re-sent with every later call (carried). Refreshed every 30 s.</div><div class="bars">` +
+    cats.map(([k, c]) => `<div>${esc(k)} <span class="muted">${c.calls}</span></div><div><div class="b" style="width:${Math.max(c.carried_tokens / cmax * 100, 1)}%"></div></div><div class="n">${tok(c.carried_tokens)}</div>`).join("") + `</div>` +
+    ((d.largest || []).length ? `<h2 style="margin-top:14px">Largest outputs</h2><div class="scroll"><table><thead><tr><th>What</th><th>Agent</th><th class="num">Output</th><th class="num">Carried</th></tr></thead><tbody>` +
+      d.largest.slice(0, 5).map((o) => `<tr><td class="mono" title="${esc(o.hint || "")}">${esc(o.label)}</td><td>${ROLE[o.role] || esc(o.role)}</td><td class="num">${tok(o.tokens)}</td><td class="num">${tok(o.carried)}</td></tr>`).join("") + `</tbody></table></div>` : "");
+  const tips = (d.advice || []).length ? d.advice.map((t) => `<div class="tip"><b>${esc(t.title)}</b><p>${esc(t.evidence)}</p><p><span>Try:</span> ${esc(t.try)}</p></div>`).join("") : `<div class="sub">Nothing to improve so far.</div>`;
+  const flags = v.flags.length ? v.flags.map((f) => `<div class="flag"><b>${esc(f.rule)}</b><p>${esc(f.evidence)}</p><p class="muted">${esc(f.why || "")}</p></div>`).join("")
+    : `<div class="sub">No rule has fired yet.</div>`;
+  $("#body").innerHTML = `<section class="tiles">${tiles.map(([l, val, n]) => `<div class="tile"><div class="label">${l}</div><div class="value">${val}</div><div class="note">${n}</div></div>`).join("")}</section>
+    <div class="grid2">
+      <section class="card"><h2>Tokens per minute</h2>${sparkline(v.burn)}</section>
+      <section class="card"><h2>Orchestrator context</h2><div class="sub">Last prompt ${tok(v.context.last)} of the largest so far, ${tok(v.context.max)}. A prompt that keeps growing is what triggers compaction.</div>
+        <div class="gauge"><span style="width:${Math.round(ctxPct * 100)}%"></span></div></section>
+    </div>
+    <section class="card"><h2>Agents</h2>${agents}</section>
+    <div class="grid2">
+      <section class="card"><h2>Recent tool calls</h2>${recent}</section>
+      <section class="card"><h2>Rules, checked as it runs</h2>${flags}</section>
+    </div>
+    <div class="grid2">
+      <section class="card"><h2>Where tokens went</h2>${where}</section>
+      <section class="card"><h2>What to improve</h2>${tips}</section>
+    </div>`;
+  meta();
+}
+function meta() {
+  if (!view) return;
+  const st = view.state;
+  $("#meta").innerHTML = `<span class="mono">${esc(view.session_id.slice(0, 8))}</span> · started ${esc(view.summary.start ? new Date(view.summary.start).toLocaleString() : "?")} · last write ${ago(st.last)} · ${esc(st.by || "")}`;
+  const age = (Date.now() - lastMsg) / 1000;
+  $("#conn").textContent = !lastMsg ? "Connecting…" : age > 25 ? "Reconnecting…" : `Live · checked ${ago(new Date(lastMsg).toISOString())} · ${view.files} file${view.files === 1 ? "" : "s"}`;
+}
+function watch() {
+  const es = new EventSource(`/api/live/stream?h=${encodeURIComponent(H)}&id=${encodeURIComponent(ID)}`);
+  es.addEventListener("view", (e) => { view = JSON.parse(e.data); lastMsg = Date.now(); $("#error").hidden = true; render(); });
+  es.addEventListener("state", (e) => { lastMsg = Date.now(); if (!view) return; view.state = JSON.parse(e.data); $("#badge").innerHTML = badge(view.state); meta(); });
+  es.addEventListener("missing", (e) => { es.close(); $("#error").hidden = false; $("#error").textContent = JSON.parse(e.data).error; $("#meta").textContent = ""; });
+  es.addEventListener("ping", () => { lastMsg = Date.now(); });
+  es.onopen = () => { lastMsg = Date.now(); meta(); };
+  setInterval(meta, 1000);
+}
+if (H && ID) watch(); else picker();
+</script>
+</body>
+</html>

@@ -28,6 +28,10 @@ page's Reviews tab, newest first.
 - It never changes those files. The one place it writes, and the only place
   it deletes, is its own reviews folder (see Reviews).
 - The web page listens on `127.0.0.1` only.
+- To tell which sessions are open, `serve` lists running processes (`ps` and
+  `lsof` on macOS, `/proc` on Linux, PowerShell on Windows, or psutil if you
+  have it). It keeps only which CLI each process is and its working folder;
+  command lines are not stored or shown. `--no-process-check` turns this off.
 - The one optional exception: **Ask Claude** / **Ask ChatGPT** and the
   review summary call your own `claude` or `codex` CLI, which sends that
   session's numbers and command names (never the transcript) to that model.
@@ -123,6 +127,25 @@ block re-sent with every call).
 Dollars use `superfan/prices.json` (Anthropic API list prices). On a
 subscription that is the API-equivalent value, not your bill. Pass
 `--prices` to use your own table.
+
+### Live sessions
+
+The home page has a **Live now** card: every Claude Code, Codex or Copilot
+session open right now, refreshed every 10 seconds, with a dot on its row.
+Click one (or open `http://127.0.0.1:8765/live`) for its **Live screen**,
+which updates by itself about a second after the agent writes to its log:
+tokens so far (and dollars for Claude Code), tokens per minute over the last
+30 minutes, orchestrator vs each subagent, the orchestrator's prompt size,
+the last 20 tool calls (tool name plus the last two parts of a path or a
+command's first word) and the health rules checked as it runs.
+
+A session is **Working** if its log was written in the last 2 minutes,
+**Open, waiting** if not but its CLI is still running in that folder, and
+ended otherwise (Copilot also marks the end in its log). Windows does not
+give another process's working folder without psutil, so there the newest
+sessions of a running CLI count as open. With `--no-process-check`, a session
+quiet for 30 minutes counts as ended. How it works and what comes next:
+[docs/live.md](docs/live.md).
 
 ## Reviews
 
