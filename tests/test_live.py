@@ -165,6 +165,17 @@ class Watch(unittest.TestCase):
         self.assertIn("categories", v2["detail"])
         self.assertTrue(v2["detail"]["advice"])
 
+    def test_burn_moves_on_without_new_lines(self):
+        lv = live.Live(self.cfg)
+        w = lv.watcher("claude-code", "s1")
+        v = w.snapshot()
+        w._agents[0].timeline.append((live.datetime.now(live.timezone.utc), 777, 0.01))  # as if read earlier
+        w.burn_at = 0
+        version = w.version
+        v = w.snapshot()
+        self.assertEqual(v["burn"]["last5_tokens"], 777)
+        self.assertGreater(w.version, version)
+
     def test_tool_calls_survive_huge_lines(self):
         # Copilot can write one multi-megabyte line after the tool calls; they must still show.
         idx = live.Live(self.cfg).index.refresh(force=True)

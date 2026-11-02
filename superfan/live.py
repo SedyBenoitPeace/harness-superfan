@@ -597,6 +597,8 @@ class Watcher:
         self.data: dict | None = None
         self.version = 0
         self.tools = ToolFeed(harness)
+        self._agents: list = []
+        self.burn_at = 0.0
         self.detail: dict | None = None
         self.detail_at = 0.0
         self.detail_sig = None
@@ -635,7 +637,19 @@ class Watcher:
                 self.next_parse = time.time() + max(1.0, 2 * self.parse_s)
                 self.sig = sig
                 if sess is not None:
+                    self._agents = [a for a in sess.agents.values() if a.model_calls or a.tool_calls]
+                    self._summary = None
                     self.data = self._view(sess, s)
+                    self.version += 1
+                    self.burn_at = time.time()
+            elif self.data is not None and time.time() - self.burn_at >= 10:
+                # Nothing new in the logs, but time moved on: the last-30-minutes chart and the
+                # breakdown must not stay frozen at the last write.
+                self.burn_at = time.time()
+                b = burn(self._agents, datetime.now(timezone.utc))
+                d = self._detail(self.data["summary"], s)
+                if b != self.data["burn"] or d is not self.data["detail"]:
+                    self.data["burn"], self.data["detail"] = b, d
                     self.version += 1
             if self.data is not None:
                 self.data["state"] = state
