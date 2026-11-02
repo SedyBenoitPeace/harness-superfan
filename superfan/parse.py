@@ -74,11 +74,15 @@ class Agent:
     compactions: int = 0       # Copilot: context compactions this agent ran
     compaction_tokens: int = 0  # Copilot: tokens those compactions used (already in `tokens`)
     tool_def_tokens: int = 0    # Copilot: largest tool-definition block in its prompt
+    last_context: int = 0       # prompt size of the latest call (the live page's context gauge)
+    timeline: list = field(default_factory=list)  # (time, tokens, dollars or None) per model call
+    _ts: datetime | None = None  # time of the line being read, for the timeline
 
     def add_usage(self, model: str, tokens: int, parts: dict | None = None) -> None:
         m = self.by_model.setdefault(model or "?", {"calls": 0, "tokens": 0, "cost_usd": None})
         m["calls"] += 1
         m["tokens"] += tokens
+        self.timeline.append((self._ts, tokens, sum(parts.values()) if parts is not None else None))
         if parts is not None:
             m["cost_usd"] = (m["cost_usd"] or 0) + sum(parts.values())
             for k, v in parts.items():
@@ -87,6 +91,7 @@ class Agent:
     def see(self, ts: datetime | None) -> None:
         if ts is None:
             return
+        self._ts = ts
         self.stamps.append(ts)
         if self.first is None or ts < self.first:
             self.first = ts
@@ -239,7 +244,7 @@ def files_touched_since(root: str, since: datetime | None, until: datetime | Non
 
 # ---------------------------------------------------------------- Claude Code
 
-def scan_claude(root: str, prices: Prices, since=None, until=None) -> dict[str, Session]:
+def scan_claude(root: str, prices: Prices, since=None, until=None, paths=None) -> dict[str, Session]:
     """~/.claude/projects/<project>/<session>.jsonl, plus subagent transcripts in
     <project>/<session>/subagents/agent-<id>.jsonl (newer versions) or inline
     lines with isSidechain=true (older versions)."""
@@ -248,7 +253,7 @@ def scan_claude(root: str, prices: Prices, since=None, until=None) -> dict[str, 
     seen_tools: set = set()
     labels: dict[str, str] = {}  # agentId -> subagent type, from the parent's tool results
 
-    for path in files_touched_since(root, since, until):
+    for path in files_touched_since(root, since, until) if paths is None else paths:
         file_agent = None
         base = os.path.basename(path)
         if os.sep + "subagents" + os.sep in path and base.startswith("agent-"):
@@ -315,6 +320,7 @@ def scan_claude(root: str, prices: Prices, since=None, until=None) -> dict[str, 
             a.tokens["cache_write"] += write
             a.tokens["output"] += out
             a.max_context = max(a.max_context, fresh + read + write)
+            a.last_context = fresh + read + write
             parts = prices.parts(model, fresh, read, w5m, w1h, out)
             a.cost_usd = (a.cost_usd or 0) + sum(parts.values())
             a.add_usage(model, fresh + read + write + out, parts)
@@ -339,12 +345,12 @@ def _codex_role(meta: dict) -> tuple[str, str]:
     return "orchestrator", ""
 
 
-def scan_codex(root: str, since=None, until=None) -> dict[str, Session]:
+def scan_codex(root: str, since=None, until=None, paths=None) -> dict[str, Session]:
     """~/.codex/sessions/YYYY/MM/DD/rollout-<time>-<thread id>.jsonl, one file per
     thread. A subagent file starts with a copy of its parent's history; only
     lines from subagent_history_start_ordinal on belong to the subagent."""
     sessions: dict[str, Session] = {}
-    for path in files_touched_since(root, since, until):
+    for path in files_touched_since(root, since, until) if paths is None else paths:
         meta = None
         start_ord = 0
         thread_id = None
@@ -390,11 +396,12 @@ def scan_codex(root: str, since=None, until=None) -> dict[str, Session]:
                 a.tokens["output"] += u.get("output_tokens") or 0
                 a.model_calls += 1
                 a.max_context = max(a.max_context, u.get("input_tokens") or 0)
+                a.last_context = u.get("input_tokens") or 0
                 if model:
                     a.models.add(model)
+                a.see(ts)
                 a.add_usage(model, (u.get("input_tokens") or 0) + (u.get("cache_write_input_tokens") or 0)
                             + (u.get("output_tokens") or 0))
-                a.see(ts)
             elif t == "event_msg" and p.get("type") == "token_count" and in_window(ts, since, until):
                 info = p.get("info") or {}
                 if info.get("total_token_usage"):
@@ -474,7 +481,7 @@ def _copilot_snapshot(d: dict) -> dict:
     return out
 
 
-def scan_copilot(root: str, since=None, until=None) -> dict[str, Session]:
+def scan_copilot(root: str, since=None, until=None, paths=None) -> dict[str, Session]:
     """~/.copilot/session-state/<session>/events.jsonl, one file per session.
     Lines with an agentId belong to that subagent; the rest to the orchestrator.
     Tokens come from session.usage_record, plus the tokens each context
@@ -484,7 +491,7 @@ def scan_copilot(root: str, since=None, until=None) -> dict[str, Session]:
     the last one in the window minus the last one before it.
     Tokens only: AI credits are never read."""
     sessions: dict[str, Session] = {}
-    for path in copilot_files(root, since, until):
+    for path in copilot_files(root, since, until) if paths is None else paths:
         folder = os.path.dirname(path)
         sid = os.path.basename(folder)
         s = None
@@ -521,10 +528,11 @@ def scan_copilot(root: str, since=None, until=None) -> dict[str, Session]:
                     a.tokens[k] += tk[k]
                 a.model_calls += 1
                 a.max_context = max(a.max_context, u.get("inputTokens") or 0)
+                a.last_context = u.get("inputTokens") or 0
                 if model:
                     a.models.add(model)
-                a.add_usage(model, sum(tk.values()))
                 a.see(ts)
+                a.add_usage(model, sum(tk.values()))
             elif t == "session.compaction_complete":
                 tk = _copilot_tokens(d.get("compactionTokensUsed") or {})
                 a.compactions += 1
@@ -548,8 +556,8 @@ def scan_copilot(root: str, since=None, until=None) -> dict[str, Session]:
             if not from_snapshots:  # shutdown totals already hold them
                 for k in TOKEN_KEYS:
                     a.tokens[k] += tk[k]
-                a.add_usage("compaction", sum(tk.values()))
                 a.see(ts)
+                a.add_usage("compaction", sum(tk.values()))
         if from_snapshots:
             ts, snap = last
             for key, cur in snap.items():
@@ -564,6 +572,7 @@ def scan_copilot(root: str, since=None, until=None) -> dict[str, Session]:
                         a.tokens[k] += delta[k]
                     a.model_calls += max(n - pn, 0)
                     a.models.add(model)
+                    a._ts = ts
                     a.add_usage(model, sum(delta.values()))
                 a.see(ts)
     return sessions

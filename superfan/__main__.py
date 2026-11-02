@@ -201,6 +201,7 @@ def cmd_serve(a: argparse.Namespace) -> int:
     from .serve import serve
     cfg = _cfg(a)
     cfg["port"] = a.port
+    cfg["process_check"] = not a.no_process_check
     if not a.no_open:
         import threading
         import webbrowser
@@ -261,6 +262,8 @@ def main(argv=None) -> int:
     w.add_argument("--keep-days", type=float, default=0,
                    help="after each new review, delete reviews older than this many days (default 0: keep all)")
     w.add_argument("--no-open", action="store_true", help="do not open the browser")
+    w.add_argument("--no-process-check", action="store_true",
+                   help="decide which sessions are open from log file times only (no process list)")
     w.set_defaults(fn=cmd_serve)
     v = sub.add_parser("review", help="review a run, a day or a window; a model writes the summary, the numbers are computed")
     g = v.add_mutually_exclusive_group()
