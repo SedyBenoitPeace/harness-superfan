@@ -73,6 +73,11 @@ td.num, th.num { text-align: right; white-space: nowrap; }
 .pick a:hover { background: var(--hover); }
 .empty { color: var(--ink-2); padding: 16px 0; text-align: center; }
 .err { color: var(--critical); }
+.bars { display: grid; grid-template-columns: minmax(110px, 200px) 1fr 70px; gap: 6px 10px; align-items: center; font-size: 13px; }
+.bars .b { height: 10px; background: var(--s1); border-radius: 0 3px 3px 0; min-width: 2px; }
+.bars .n { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink-2); }
+.tip { border: 1px solid var(--ring); border-left: 3px solid var(--serious); border-radius: 8px; padding: 8px 12px; margin-bottom: 8px; font-size: 13px; }
+.tip b { display: block; } .tip p { margin: 2px 0; color: var(--ink-2); } .tip p span { color: var(--ink); font-weight: 600; }
 .new { animation: flash 1.2s ease-out; }
 @keyframes flash { from { background: var(--hover); } }
 @media (max-width: 640px) { .hide-sm { display: none; } .grid2 { grid-template-columns: 1fr; } }
@@ -154,6 +159,13 @@ function render() {
     [...v.recent].reverse().map((r) => { const k = r.ts + r.tool + r.target, fresh = seenTools.size && !seenTools.has(k); seenTools.add(k);
       return `<tr class="${fresh ? "new" : ""}"><td class="mono">${esc(clock(r.ts))}</td><td><span class="role" style="background:var(${RCOL[r.role]})"></span>${ROLE[r.role] || esc(r.role)}</td><td class="mono">${esc(r.tool)}</td><td class="mono">${esc(r.target)}</td></tr>`; }).join("") +
     `</tbody></table></div>` : `<div class="empty">No tool calls yet.</div>`;
+  const d = v.detail || {}, cats = Object.entries(d.categories || {}).slice(0, 6), cmax = Math.max(...cats.map(([, c]) => c.carried_tokens), 1);
+  const where = d.error ? `<div class="sub err">Could not read the breakdown: ${esc(d.error)}</div>` : !cats.length ? `<div class="sub">No tool outputs yet.</div>` :
+    `<div class="sub" style="margin-bottom:8px">Tokens each kind of tool output costs, re-sent with every later call (carried). Refreshed every 30 s.</div><div class="bars">` +
+    cats.map(([k, c]) => `<div>${esc(k)} <span class="muted">${c.calls}</span></div><div><div class="b" style="width:${Math.max(c.carried_tokens / cmax * 100, 1)}%"></div></div><div class="n">${tok(c.carried_tokens)}</div>`).join("") + `</div>` +
+    ((d.largest || []).length ? `<h2 style="margin-top:14px">Largest outputs</h2><div class="scroll"><table><thead><tr><th>What</th><th>Agent</th><th class="num">Output</th><th class="num">Carried</th></tr></thead><tbody>` +
+      d.largest.slice(0, 5).map((o) => `<tr><td class="mono" title="${esc(o.hint || "")}">${esc(o.label)}</td><td>${ROLE[o.role] || esc(o.role)}</td><td class="num">${tok(o.tokens)}</td><td class="num">${tok(o.carried)}</td></tr>`).join("") + `</tbody></table></div>` : "");
+  const tips = (d.advice || []).length ? d.advice.map((t) => `<div class="tip"><b>${esc(t.title)}</b><p>${esc(t.evidence)}</p><p><span>Try:</span> ${esc(t.try)}</p></div>`).join("") : `<div class="sub">Nothing to improve so far.</div>`;
   const flags = v.flags.length ? v.flags.map((f) => `<div class="flag"><b>${esc(f.rule)}</b><p>${esc(f.evidence)}</p><p class="muted">${esc(f.why || "")}</p></div>`).join("")
     : `<div class="sub">No rule has fired yet.</div>`;
   $("#body").innerHTML = `<section class="tiles">${tiles.map(([l, val, n]) => `<div class="tile"><div class="label">${l}</div><div class="value">${val}</div><div class="note">${n}</div></div>`).join("")}</section>
@@ -166,6 +178,10 @@ function render() {
     <div class="grid2">
       <section class="card"><h2>Recent tool calls</h2>${recent}</section>
       <section class="card"><h2>Rules, checked as it runs</h2>${flags}</section>
+    </div>
+    <div class="grid2">
+      <section class="card"><h2>Where tokens went</h2>${where}</section>
+      <section class="card"><h2>What to improve</h2>${tips}</section>
     </div>`;
   meta();
 }

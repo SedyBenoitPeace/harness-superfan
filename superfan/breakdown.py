@@ -172,11 +172,11 @@ def classify(tool: str, body, cats: dict | None = None) -> str:
 
 # ---------------------------------------------------------------------- Codex
 
-def codex_outputs(root: str, since=None, until=None, categories=None, session_filter=None) -> tuple[list, dict]:
+def codex_outputs(root: str, since=None, until=None, categories=None, session_filter=None, paths=None) -> tuple[list, dict]:
     """One dict per tool output, plus command run time per category."""
     out: list = []
     cmd_seconds: dict = {}
-    for path in files_touched_since(root, since, until):
+    for path in files_touched_since(root, since, until) if paths is None else paths:
         meta = None
         start_ord = 0
         calls: dict = {}
@@ -253,7 +253,7 @@ def codex_breakdown(root: str, since=None, until=None, categories=None, session_
 
 # ---------------------------------------------------------------- Claude Code
 
-def claude_outputs(root: str, prices: Prices | None = None, since=None, until=None, categories=None) -> tuple[list, dict]:
+def claude_outputs(root: str, prices: Prices | None = None, since=None, until=None, categories=None, paths=None) -> tuple[list, dict]:
     """Same records for ~/.claude/projects. Each agent (main conversation or a
     subagent) is its own thread; its model calls are its assistant responses.
     Run time is the gap between a tool call and its result, capped at 10 min."""
@@ -261,7 +261,7 @@ def claude_outputs(root: str, prices: Prices | None = None, since=None, until=No
     out: list = []
     seconds: dict = {}
     seen_msgs: set = set()
-    for path in files_touched_since(root, since, until):
+    for path in files_touched_since(root, since, until) if paths is None else paths:
         base = os.path.basename(path)
         in_sub = os.sep + "subagents" + os.sep in path and base.startswith("agent-")
         file_agent = base[len("agent-"):-len(".jsonl")] if in_sub else None
@@ -326,14 +326,14 @@ def claude_outputs(root: str, prices: Prices | None = None, since=None, until=No
 
 # -------------------------------------------------------------------- Copilot
 
-def copilot_outputs(root: str, since=None, until=None, categories=None) -> tuple[list, dict]:
+def copilot_outputs(root: str, since=None, until=None, categories=None, paths=None) -> tuple[list, dict]:
     """Same records for ~/.copilot/session-state. Each agent (orchestrator, or a
     subagent by agentId) is its own thread; its model calls are its
     session.usage_record lines (older CLIs without them: its assistant.message
     lines). Run time is tool start to tool complete."""
     out: list = []
     seconds: dict = {}
-    for path in copilot_files(root, since, until):
+    for path in copilot_files(root, since, until) if paths is None else paths:
         folder = os.path.dirname(path)
         sid, project = os.path.basename(folder), None
         threads: dict = {}

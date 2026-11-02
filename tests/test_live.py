@@ -162,6 +162,8 @@ class Watch(unittest.TestCase):
         self.assertEqual(v2["context"]["last"], 1000)
         self.assertEqual(v2["recent"][-1], {"ts": now, "role": "orchestrator", "tool": "Read", "target": "deep/app.py"})
         self.assertEqual(v2["state"]["state"], "working")
+        self.assertIn("categories", v2["detail"])
+        self.assertTrue(v2["detail"]["advice"])
 
     def test_tool_calls_survive_huge_lines(self):
         # Copilot can write one multi-megabyte line after the tool calls; they must still show.

@@ -36,13 +36,15 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 
-from . import rules
+from . import rules, advice
+from .breakdown import claude_outputs, codex_outputs, copilot_outputs
 from .parse import Prices, iter_jsonl, parse_ts, scan_claude, scan_codex, scan_copilot
 
 WORKING_S = 120
 IDLE_S = 1800
 LOOKBACK_H = 24          # sessions written in the last day are candidates
 INDEX_TTL_S = 3.0
+DETAIL_EVERY_S = 30.0    # the "where tokens go" breakdown is heavier; refresh it at most this often
 PROCESS_TTL_S = 5.0
 RECENT_N = 20
 HARNESSES = ("claude-code", "codex", "copilot")
@@ -595,6 +597,9 @@ class Watcher:
         self.data: dict | None = None
         self.version = 0
         self.tools = ToolFeed(harness)
+        self.detail: dict | None = None
+        self.detail_at = 0.0
+        self.detail_sig = None
 
     def _parse(self, files: list):
         if self.harness == "claude-code":
@@ -637,6 +642,28 @@ class Watcher:
                 self.data["process_check"] = how
             return self.data
 
+    def _detail(self, summary: dict, s: dict) -> dict | None:
+        """Same "where tokens went" and suggestions as the dashboard's session drill-down,
+        for this session's files only; at most every DETAIL_EVERY_S seconds."""
+        if self.detail is not None and (self.sig == self.detail_sig or time.time() - self.detail_at < DETAIL_EVERY_S):
+            return self.detail
+        cfg = self.live.cfg
+        files = s["files"]
+        try:
+            if self.harness == "claude-code":
+                outs, _ = claude_outputs(None, Prices(cfg.get("prices") or {}), paths=files)
+            elif self.harness == "codex":
+                outs, _ = codex_outputs(None, paths=files)
+            else:
+                outs, _ = copilot_outputs(None, paths=files)
+            outs = [o for o in outs if o["session"] == summary["session_id"]] or outs
+            self.detail = advice.session_detail(summary, outs, cfg.get("orchestrator_limit", 0.40),
+                                                cfg.get("output_limit", 8000))
+        except Exception as e:  # the live view must keep working even if the breakdown can't be read
+            self.detail = {"error": repr(e)}
+        self.detail_at, self.detail_sig = time.time(), self.sig
+        return self.detail
+
     def _view(self, sess, s: dict) -> dict:
         cfg = self.live.cfg
         summary = sess.summary()
@@ -649,6 +676,7 @@ class Watcher:
             if r is not None:
                 r["last_context"] = a.last_context
                 r["last"] = a.last.isoformat() if a.last else None
+        detail = self._detail(summary, s)
         flags = rules.orchestrator_share([summary], cfg.get("orchestrator_limit", 0.40))
         flags += rules.frequent_compaction([summary]) + rules.tool_definitions([summary])
         return {
@@ -658,6 +686,7 @@ class Watcher:
             "context": {"last": orch.last_context if orch else 0, "max": orch.max_context if orch else 0},
             "recent": self.tools.update(s["files"], self.live.index.meta),
             "flags": flags,
+            "detail": detail,
             "files": len(s["files"]),
             "parse_s": round(self.parse_s, 3),
             "read_at": now.isoformat(),
