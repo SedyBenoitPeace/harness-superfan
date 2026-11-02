@@ -45,7 +45,6 @@ LOOKBACK_H = 24          # sessions written in the last day are candidates
 INDEX_TTL_S = 3.0
 PROCESS_TTL_S = 5.0
 RECENT_N = 20
-TAIL_BYTES = 512 * 1024
 HARNESSES = ("claude-code", "codex", "copilot")
 ROOT_KEY = {"claude-code": "claude", "codex": "codex", "copilot": "copilot"}
 
@@ -500,54 +499,69 @@ def _target(inp) -> str:
     return ""
 
 
-def _tail(path: str):
-    try:
-        size = os.path.getsize(path)
-        with open(path, "rb") as fh:
-            if size > TAIL_BYTES:
-                fh.seek(size - TAIL_BYTES)
-                fh.readline()  # drop the partial line
-            data = fh.read()
-    except OSError:
-        return
-    for line in data.splitlines():
-        try:
-            yield json.loads(line)
-        except ValueError:
-            continue
+_MARKERS = {"claude-code": b'"tool_use"', "codex": b'_call"', "copilot": b'"tool.execution_start"'}
+
+
+def _tool_from(harness: str, r: dict, m: dict, sub: bool) -> list:
+    """Tool calls in one log line as (time, role, tool, target)."""
+    out = []
+    if harness == "claude-code":
+        if r.get("type") == "assistant":
+            for b in (r.get("message") or {}).get("content") or []:
+                if isinstance(b, dict) and b.get("type") == "tool_use":
+                    out.append((r.get("timestamp"), "worker" if sub or r.get("isSidechain") else "orchestrator",
+                                b.get("name") or "?", _target(b.get("input"))))
+    elif harness == "codex":
+        p = r.get("payload") or {}
+        if (r.get("ordinal") or 0) >= m.get("start_ord", 0) and r.get("type") == "response_item" \
+                and p.get("type") in ("function_call", "custom_tool_call", "local_shell_call"):
+            role = "orchestrator" if m.get("thread") == m.get("sid") else "worker"
+            out.append((r.get("timestamp"), role, p.get("name") or p.get("type"),
+                        _target(p.get("arguments") or p.get("input") or p.get("action"))))
+    elif r.get("type") == "tool.execution_start":
+        d = r.get("data") or {}
+        out.append((r.get("timestamp"), "worker" if r.get("agentId") else "orchestrator",
+                    d.get("toolName") or "?", _target(d.get("arguments"))))
+    return [x for x in out if x[0]]
+
+
+class ToolFeed:
+    """The last n tool calls of a session: time, agent, tool name and a short
+    target (last two path parts or a command's first word), never arguments
+    or text. Reads each file once, then only the bytes added since, and only
+    parses lines that can hold a tool call (a single log line can be megabytes)."""
+
+    def __init__(self, harness: str, n: int = RECENT_N):
+        self.harness, self.n = harness, n
+        self.offsets: dict = {}
+        self.items: list = []
+
+    def update(self, files: list, meta: dict) -> list:
+        marker = _MARKERS[self.harness]
+        for path in files:
+            off = self.offsets.get(path, 0)
+            try:
+                with open(path, "rb") as fh:
+                    fh.seek(off)
+                    data = fh.read()
+            except OSError:
+                continue
+            cut = data.rfind(b"\n") + 1  # leave a half-written last line for next time
+            self.offsets[path] = off + cut
+            m, sub = meta.get(path) or {}, os.sep + "subagents" + os.sep in path
+            for line in data[:cut].splitlines():
+                if marker not in line:
+                    continue
+                try:
+                    self.items += _tool_from(self.harness, json.loads(line), m, sub)
+                except ValueError:
+                    continue
+            self.items = sorted(self.items, key=lambda x: x[0])[-self.n:]
+        return [{"ts": t, "role": role, "tool": tool, "target": tgt} for t, role, tool, tgt in self.items]
 
 
 def recent_tools(harness: str, files: list, meta: dict, n: int = RECENT_N) -> list:
-    """The last n tool calls: time, agent, tool name and a short target
-    (last two path parts or a command's first word). Never arguments or text."""
-    out = []
-    for path in files:
-        m = meta.get(path) or {}
-        sub = os.sep + "subagents" + os.sep in path
-        for r in _tail(path):
-            if harness == "claude-code":
-                if r.get("type") != "assistant":
-                    continue
-                for b in (r.get("message") or {}).get("content") or []:
-                    if isinstance(b, dict) and b.get("type") == "tool_use":
-                        out.append((r.get("timestamp"), "worker" if sub or r.get("isSidechain") else "orchestrator",
-                                    b.get("name") or "?", _target(b.get("input"))))
-            elif harness == "codex":
-                if (r.get("ordinal") or 0) < m.get("start_ord", 0):
-                    continue
-                p = r.get("payload") or {}
-                if r.get("type") == "response_item" and p.get("type") in ("function_call", "custom_tool_call", "local_shell_call"):
-                    role = "orchestrator" if m.get("thread") == m.get("sid") else "worker"
-                    out.append((r.get("timestamp"), role, p.get("name") or p.get("type"),
-                                _target(p.get("arguments") or p.get("input") or p.get("action"))))
-            else:
-                if r.get("type") == "tool.execution_start":
-                    d = r.get("data") or {}
-                    out.append((r.get("timestamp"), "worker" if r.get("agentId") else "orchestrator",
-                                d.get("toolName") or "?", _target(d.get("arguments"))))
-    out = [x for x in out if x[0]]
-    out.sort(key=lambda x: x[0])
-    return [{"ts": t, "role": role, "tool": tool, "target": tgt} for t, role, tool, tgt in out[-n:]]
+    return ToolFeed(harness, n).update(files, meta)
 
 
 def burn(agents: list, now: datetime, minutes: int = 30) -> dict:
@@ -580,6 +594,7 @@ class Watcher:
         self.parse_s = 0.0
         self.data: dict | None = None
         self.version = 0
+        self.tools = ToolFeed(harness)
 
     def _parse(self, files: list):
         if self.harness == "claude-code":
@@ -641,7 +656,7 @@ class Watcher:
             "summary": summary,
             "burn": burn(agents, now),
             "context": {"last": orch.last_context if orch else 0, "max": orch.max_context if orch else 0},
-            "recent": recent_tools(self.harness, s["files"], self.live.index.meta),
+            "recent": self.tools.update(s["files"], self.live.index.meta),
             "flags": flags,
             "files": len(s["files"]),
             "parse_s": round(self.parse_s, 3),

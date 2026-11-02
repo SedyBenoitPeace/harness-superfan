@@ -163,6 +163,23 @@ class Watch(unittest.TestCase):
         self.assertEqual(v2["recent"][-1], {"ts": now, "role": "orchestrator", "tool": "Read", "target": "deep/app.py"})
         self.assertEqual(v2["state"]["state"], "working")
 
+    def test_tool_calls_survive_huge_lines(self):
+        # Copilot can write one multi-megabyte line after the tool calls; they must still show.
+        idx = live.Live(self.cfg).index.refresh(force=True)
+        path = next(f for (h, _), s in idx.items() if h == "copilot" for f in s["files"])
+        feed = live.ToolFeed("copilot")
+        first = feed.update([path], {})
+        self.assertTrue(first)
+        with open(path, "a") as fh:
+            fh.write(json.dumps({"type": "session.usage_checkpoint", "timestamp": "2026-01-05T09:59:00.000Z",
+                                 "data": {"blob": "x" * 2_000_000}}) + "\n")
+            fh.write('{"type": "tool.execution_start", "timestamp": "2026-01-05T09:59:01.000Z", "data": {"toolName": "view", "arguments": {"path": "/a/b/c.py"}}}')  # still being written
+        self.assertEqual(live.ToolFeed("copilot").update([path], {})[-1], first[-1])
+        with open(path, "a") as fh:
+            fh.write("\n")
+        got = feed.update([path], {})
+        self.assertEqual(got[-1], {"ts": "2026-01-05T09:59:01.000Z", "role": "orchestrator", "tool": "view", "target": "b/c.py"})
+
     def test_codex_and_copilot_views(self):
         lv = live.Live(self.cfg)
         idx, _ = lv.sessions()

@@ -174,7 +174,7 @@ function meta() {
   const st = view.state;
   $("#meta").innerHTML = `<span class="mono">${esc(view.session_id.slice(0, 8))}</span> · started ${esc(view.summary.start ? new Date(view.summary.start).toLocaleString() : "?")} · last write ${ago(st.last)} · ${esc(st.by || "")}`;
   const age = (Date.now() - lastMsg) / 1000;
-  $("#conn").textContent = !lastMsg ? "Connecting…" : age > 25 ? "Reconnecting…" : `Live · read ${ago(view.read_at)} · ${view.files} file${view.files === 1 ? "" : "s"}`;
+  $("#conn").textContent = !lastMsg ? "Connecting…" : age > 25 ? "Reconnecting…" : `Live · checked ${ago(new Date(lastMsg).toISOString())} · ${view.files} file${view.files === 1 ? "" : "s"}`;
 }
 function watch() {
   const es = new EventSource(`/api/live/stream?h=${encodeURIComponent(H)}&id=${encodeURIComponent(ID)}`);
