@@ -97,7 +97,7 @@ reports whose run falls in the window, and keeps its results in
   call's prompt into fresh input, cache write and cache read; a thin blue line
   under it is the part that was re-sent tool output. Next to it: re-sent
   output, the share of it that came back as cache reads, and how much of it
-  was file reads. Copilot CLIs older than ~1.0.9x log no usage per call, so
+  was file reads. Older Copilot CLIs (e.g. 1.0.90) log no usage per call, so
   for them the cache share is estimated from the session totals and marked `~`.
   Click a kind of work (reading files, git...) for the files and commands
   behind it: which agents ran them, how often the same agent re-read a file,
