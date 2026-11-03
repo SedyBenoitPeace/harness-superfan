@@ -86,6 +86,73 @@ def _tz(s: str) -> timezone:
     return timezone(sign * timedelta(hours=int(h), minutes=int(m)))
 
 
+def _pct(part, whole) -> str:
+    return f"{part / whole:.0%}" if whole else "—"
+
+
+def cmd_carry(a: argparse.Namespace) -> int:
+    """One session's tokens split by input / cache read / cache write / output,
+    then its tool-output carry split into cache read and fresh, by role and by
+    category. Tokens only, so it is safe for any harness."""
+    from .parse import scan_claude, scan_codex, scan_copilot
+    from .breakdown import codex_outputs
+    until = datetime.fromisoformat(a.until).replace(tzinfo=timezone.utc) if a.until else datetime.now(timezone.utc)
+    since = until - timedelta(days=a.days)
+    root = os.path.expanduser(getattr(a, a.harness.replace("-", "_")) or "")
+    if not root:
+        print(f"--{a.harness} folder is required", file=sys.stderr)
+        return 2
+    if a.harness == "copilot":
+        sessions, (outs, _) = scan_copilot(root, since, until), copilot_outputs(root, since, until)
+    elif a.harness == "codex":
+        sessions, (outs, _) = scan_codex(root, since, until), codex_outputs(root, since, until)
+    else:
+        sessions, (outs, _) = scan_claude(root, Prices({}), since, until), claude_outputs(root, None, since, until)
+    hits = [s for sid, s in sessions.items() if sid.startswith(a.session)]
+    if len(hits) != 1:
+        print(f"{len(hits)} sessions match {a.session!r} in that window", file=sys.stderr)
+        return 1
+    s = hits[0].summary()
+    sid = s["session_id"]
+    outs = [o for o in outs if o["session"] == sid]
+    print(f"## {a.harness} {sid[:8]} ({s['start'] or '?'} to {s['end'] or '?'})\n")
+    print("### Tokens billed per model call\n")
+    print("| agents | calls | prompt | fresh input | cache read | cache write | output |")
+    print("|---|---|---|---|---|---|---|")
+    groups = {"orchestrator": [r for r in s["agents"] if r["role"] != "worker"],
+              "workers": [r for r in s["agents"] if r["role"] == "worker"]}
+    for name, rows in list(groups.items()) + [("all", s["agents"])]:
+        if not rows:
+            continue
+        t = {k: sum(r["tokens"][k] for r in rows) for k in ("input", "cache_read", "cache_write", "output")}
+        pr = t["input"] + t["cache_read"] + t["cache_write"]
+        print(f"| {name} ({len(rows)}) | {sum(r['model_calls'] for r in rows)} | {fmt_tok(pr)} | "
+              f"{fmt_tok(t['input'])} ({_pct(t['input'], pr)}) | {fmt_tok(t['cache_read'])} ({_pct(t['cache_read'], pr)}) | "
+              f"{fmt_tok(t['cache_write'])} ({_pct(t['cache_write'], pr)}) | {fmt_tok(t['output'])} |")
+    print("\n### Tool-output carry (output size x later calls), split by how later calls took it\n")
+    print("| scope | outputs | output tokens | carried | as cache read | as fresh / cache write |")
+    print("|---|---|---|---|---|---|")
+    def row(label, xs):
+        car = sum(o["carried"] for o in xs)
+        known = [o for o in xs if o["carried_cache_read"] is not None]
+        if known:
+            cr = sum(o["carried_cache_read"] for o in known)
+            fr = sum(o["carried_fresh"] for o in known)
+            tail = f"{fmt_tok(cr)} ({_pct(cr, cr + fr)}) | {fmt_tok(fr)} ({_pct(fr, cr + fr)})"
+        else:
+            tail = "— | —"
+        print(f"| {label} | {len(xs)} | {fmt_tok(sum(o['tokens'] for o in xs))} | {fmt_tok(car)} | {tail} |")
+    for role in ("orchestrator", "worker"):
+        xs = [o for o in outs if (o["role"] == "worker") == (role == "worker")]
+        if xs:
+            row(f"all outputs, {role}", xs)
+            rd = [o for o in xs if o["category"] == "reading files"]
+            if rd:
+                row(f"reading files, {role}", rd)
+    row("all outputs, everyone", outs)
+    return 0
+
+
 def cmd_check(a: argparse.Namespace) -> int:
     until = datetime.fromisoformat(a.until).replace(tzinfo=timezone.utc) if a.until else datetime.now(timezone.utc)
     since = until - timedelta(days=a.days)
@@ -227,6 +294,15 @@ def main(argv=None) -> int:
     t.add_argument("--n", type=int, default=5)
     t.add_argument("--by", choices=["tokens", "cost"], default="tokens")
     t.set_defaults(fn=cmd_top)
+    k = sub.add_parser("carry", help="one session: token split per call, and tool-output carry split into cache read / fresh")
+    k.add_argument("session", help="session id or its first characters")
+    k.add_argument("--harness", choices=["copilot", "codex", "claude"], default="copilot")
+    k.add_argument("--claude", default="~/.claude/projects")
+    k.add_argument("--codex", default="~/.codex/sessions")
+    k.add_argument("--copilot", default="~/.copilot/session-state")
+    k.add_argument("--days", type=float, default=60)
+    k.add_argument("--until", help="ISO date/time the window ends (default: now, UTC)")
+    k.set_defaults(fn=cmd_carry)
     c = sub.add_parser("check", help="run the health rules and print findings as JSON")
     c.add_argument("--claude")
     c.add_argument("--codex")

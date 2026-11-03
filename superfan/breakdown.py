@@ -6,6 +6,16 @@ the bill for every call that follows it. For each tool call we estimate
   output_tokens  ~ characters of the output the model saw / 4
   carried_tokens ~ output_tokens x model calls after it in the same thread
 
+and split the carry by how those later calls paid for it. The first call after
+an output always takes it as new prompt (fresh input or a cache write); each
+call after that takes it at that call's own cache-read share of its prompt:
+
+  carried_cache_read ~ output_tokens x sum(cache_read / prompt) over later calls but the first
+  carried_fresh      = carried_tokens - carried_cache_read
+
+The logs give cache hits per call, not per tool output, so this is an estimate.
+It is None when a thread's calls carry no usage (older Copilot CLIs).
+
 and group both by a category: first by the tool's name (Read, apply_patch,
 spawn_agent...), then, for shell tools, by the command it ran. Categories are
 regular expressions, checked in order; pass your own dicts to fit another
@@ -20,7 +30,8 @@ import os
 import re
 import shlex
 
-from .parse import iter_jsonl, parse_ts, in_window, files_touched_since, Prices, copilot_files, copilot_project
+from .parse import iter_jsonl, parse_ts, in_window, files_touched_since, Prices, copilot_files, copilot_project, \
+    _copilot_tokens
 
 # Tool names that say what the work is, whatever the arguments.
 TOOL_CATEGORIES = {
@@ -170,6 +181,42 @@ def classify(tool: str, body, cats: dict | None = None) -> str:
     return "other"
 
 
+def _share(fresh: int, read: int, write: int):
+    """A call's cache-read share of its prompt."""
+    prompt = fresh + read + write
+    return read / prompt if prompt else 0.0
+
+
+def _cache_split(events: list, call: str = "call") -> list:
+    """For each event, the cache-read share summed over the later calls but the
+    first (None if any later call has no share). Calls are tuples whose last
+    item is their share; `call` names the kind that counts as a model call."""
+    out, acc, nxt, unknown = [None] * len(events), 0.0, None, False
+    for i in range(len(events) - 1, -1, -1):
+        e = events[i]
+        if e[0] == call:
+            if e[-1] is None:
+                unknown = True
+            else:
+                acc += e[-1]
+            nxt = e[-1]
+            continue
+        if e[0] != "out":
+            continue
+        if not unknown and nxt is not None:
+            out[i] = acc - nxt
+        elif not unknown:
+            out[i] = 0.0  # no later call
+    return out
+
+
+def _split_fields(tok: int, after: int, cached_share) -> dict:
+    if cached_share is None:
+        return {"carried_cache_read": None, "carried_fresh": None}
+    read = min(round(tok * cached_share), tok * after)
+    return {"carried_cache_read": read, "carried_fresh": tok * after - read}
+
+
 # ---------------------------------------------------------------------- Codex
 
 def codex_outputs(root: str, since=None, until=None, categories=None, session_filter=None, paths=None) -> tuple[list, dict]:
@@ -203,7 +250,10 @@ def codex_outputs(root: str, since=None, until=None, categories=None, session_fi
             if not in_window(ts, since, until):
                 continue
             if t == "token_usage_record" and p.get("thread_id") == meta.get("id"):
-                events.append(("call",))
+                u = p.get("usage") or {}
+                cached = u.get("cached_input_tokens") or 0
+                events.append(("call", _share((u.get("input_tokens") or 0) - cached, cached,
+                                              u.get("cache_write_input_tokens") or 0)))
             elif t == "response_item" and p.get("type") in ("custom_tool_call", "function_call"):
                 name = p.get("name") or ""
                 body = p.get("input") or p.get("arguments") or ""
@@ -228,8 +278,9 @@ def codex_outputs(root: str, since=None, until=None, categories=None, session_fi
         role = "orchestrator" if src in (None, "user") else ("reviewer" if src == "guardian_review" else "worker")
         agent = meta.get("agent_role") or role
         total_calls = sum(1 for e in events if e[0] == "call")
+        shares = _cache_split(events)
         seen = 0
-        for e in events:
+        for i, e in enumerate(events):
             if e[0] == "call":
                 seen += 1
                 continue
@@ -238,7 +289,7 @@ def codex_outputs(root: str, since=None, until=None, categories=None, session_fi
             out.append({"harness": "codex", "session": root_id, "project": project, "agent_id": meta.get("id"),
                         "role": role, "agent": agent, "category": cat, "label": label, "tool": name,
                         "sample": sample, "tokens": tok, "calls_after": after, "carried": tok * after,
-                        "carried_usd": None})
+                        "carried_usd": None, **_split_fields(tok, after, shares[i])})
     return out, cmd_seconds
 
 
@@ -293,7 +344,10 @@ def claude_outputs(root: str, prices: Prices | None = None, since=None, until=No
                 mid = (msg.get("id"), r.get("requestId"))
                 if msg.get("usage") and mid not in seen_msgs:
                     seen_msgs.add(mid)
-                    th["events"].append(("call", th["model"]))
+                    u = msg["usage"]
+                    th["events"].append(("call", th["model"], _share(u.get("input_tokens") or 0,
+                                                                    u.get("cache_read_input_tokens") or 0,
+                                                                    u.get("cache_creation_input_tokens") or 0)))
             else:
                 for b in content:
                     if isinstance(b, dict) and b.get("type") == "tool_result":
@@ -310,6 +364,7 @@ def claude_outputs(root: str, prices: Prices | None = None, since=None, until=No
                     acc += (prices.lookup(e[1]) or {}).get("cache_read", 0) if e[1] else 0
                 price_after.append(acc)
             price_after.reverse()
+            shares = _cache_split(th["events"])
             seen = 0
             for i, e in enumerate(th["events"]):
                 if e[0] == "call":
@@ -320,7 +375,8 @@ def claude_outputs(root: str, prices: Prices | None = None, since=None, until=No
                 out.append({"harness": "claude-code", "session": th["session"], "project": th["project"],
                             "agent_id": key, "role": th["role"], "agent": th["role"], "category": cat, "label": label,
                             "tool": name, "sample": sample, "tokens": tok, "calls_after": after, "carried": tok * after,
-                            "carried_usd": round(tok * price_after[i] / 1_000_000, 6)})
+                            "carried_usd": round(tok * price_after[i] / 1_000_000, 6),
+                            **_split_fields(tok, after, shares[i])})
     return out, seconds
 
 
@@ -353,9 +409,10 @@ def copilot_outputs(root: str, since=None, until=None, categories=None, paths=No
             th = threads.setdefault(aid or "main", {"events": [], "calls": {}})
             if t == "session.usage_record":
                 has_records = True
-                th["events"].append(("call",))
+                c = _copilot_tokens(d.get("usage") or {})
+                th["events"].append(("call", _share(c["input"], c["cache_read"], c["cache_write"])))
             elif t == "assistant.message":
-                th["events"].append(("msg",))
+                th["events"].append(("msg", None))
             elif t == "tool.execution_start":
                 name, body = d.get("toolName") or "?", d.get("arguments") or {}
                 cat = classify(name, body, categories)
@@ -371,8 +428,9 @@ def copilot_outputs(root: str, since=None, until=None, categories=None, paths=No
         for key, th in threads.items():
             n_calls = sum(1 for e in th["events"] if e[0] == call)
             role = "orchestrator" if key == "main" else "worker"
+            shares = _cache_split(th["events"], call)
             seen = 0
-            for e in th["events"]:
+            for i, e in enumerate(th["events"]):
                 if e[0] in ("call", "msg"):
                     seen += e[0] == call
                     continue
@@ -381,11 +439,20 @@ def copilot_outputs(root: str, since=None, until=None, categories=None, paths=No
                 out.append({"harness": "copilot", "session": sid, "project": project or "?", "agent_id": key,
                             "role": role, "agent": names.get(key, role), "category": cat, "label": label,
                             "tool": name, "sample": sample, "tokens": tok, "calls_after": after,
-                            "carried": tok * after, "carried_usd": None})
+                            "carried": tok * after, "carried_usd": None, **_split_fields(tok, after, shares[i])})
     return out, seconds
 
 
 # ------------------------------------------------------------------ summary
+
+def _add_split(acc: dict, o: dict) -> None:
+    """Add an output's cache-read / fresh carry to a total; a total stays None
+    only while none of its outputs had usage."""
+    if o.get("carried_cache_read") is None:
+        return
+    for k in ("carried_cache_read", "carried_fresh"):
+        acc[k] = (acc[k] or 0) + o[k]
+
 
 def summarise(outs: list, seconds: dict | None = None) -> dict:
     """Group output records by category, with drill-downs: by role, by label
@@ -396,25 +463,31 @@ def summarise(outs: list, seconds: dict | None = None) -> dict:
     by_session: dict = {}
     for o in outs:
         c = cats.setdefault(o["category"], {"tool_calls": 0, "output_tokens": 0, "carried_tokens": 0, "carried_usd": None,
+                                            "carried_cache_read": None, "carried_fresh": None,
                                             "by_role": {}, "labels": {}, "sessions": {}, "largest": []})
         c["tool_calls"] += 1
         c["output_tokens"] += o["tokens"]
         c["carried_tokens"] += o["carried"]
         if o["carried_usd"] is not None:
             c["carried_usd"] = (c["carried_usd"] or 0) + o["carried_usd"]
+        _add_split(c, o)
         c["by_role"][o["role"]] = c["by_role"].get(o["role"], 0) + o["carried"]
         lb = c["labels"].setdefault(o["label"], {"label": o["label"], "calls": 0, "output_tokens": 0, "carried_tokens": 0,
                                                  "max_output": 0, "carried_usd": None,
+                                                 "carried_cache_read": None, "carried_fresh": None,
                                                  "sample": short_paths(o["sample"])})
         lb["calls"] += 1
         lb["output_tokens"] += o["tokens"]
         lb["carried_tokens"] += o["carried"]
         lb["max_output"] = max(lb["max_output"], o["tokens"])
+        _add_split(lb, o)
         if o["carried_usd"] is not None:
             lb["carried_usd"] = (lb["carried_usd"] or 0) + o["carried_usd"]
         ss = c["sessions"].setdefault(o["session"], {"session": o["session"], "project": o["project"], "calls": 0,
-                                                     "carried_tokens": 0})
+                                                     "carried_tokens": 0, "carried_cache_read": None,
+                                                     "carried_fresh": None})
         ss["calls"] += 1
+        _add_split(ss, o)
         ss["carried_tokens"] += o["carried"]
         c["largest"].append(o)
         per = by_session.setdefault(o["session"], {})

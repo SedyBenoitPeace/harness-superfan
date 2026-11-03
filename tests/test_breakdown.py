@@ -4,7 +4,7 @@ import os
 import unittest
 from datetime import datetime, timezone
 
-from superfan.breakdown import classify, _label, _sample, claude_outputs, codex_breakdown, copilot_outputs
+from superfan.breakdown import classify, _label, _sample, claude_outputs, codex_breakdown, copilot_outputs, _cache_split
 from superfan.parse import scan
 from superfan.advice import advise
 
@@ -69,6 +69,30 @@ class Outputs(unittest.TestCase):
         self.assertIsNone(by["view AGENTS.md"]["carried_usd"])
         self.assertEqual(secs["kit scripts and gate"], 2)
         self.assertEqual(by["git log"]["calls_after"], 1)  # older CLI: assistant messages count as calls
+
+
+class CacheSplit(unittest.TestCase):
+    def test_first_later_call_takes_the_output_fresh(self):
+        ev = [("out", "c", 100, "l", "n", ""), ("call", 0.9), ("call", 0.5), ("out", "c", 10, "l", "n", ""), ("call", 0.8)]
+        sh = _cache_split(ev)
+        self.assertAlmostEqual(sh[0], 0.5 + 0.8)  # calls 2 and 3; call 1 wrote it
+        self.assertAlmostEqual(sh[3], 0.0)  # only one later call: all fresh
+        self.assertIsNone(sh[1])
+
+    def test_unknown_usage_gives_none(self):
+        self.assertEqual(_cache_split([("out", "c", 1, "l", "n", ""), ("msg", None)], "msg"), [None, None])
+
+    def test_copilot_split_adds_up(self):
+        outs, _ = copilot_outputs(os.path.join(FIX, "copilot"), since=SINCE, until=UNTIL)
+        by = {o["label"]: o for o in outs}
+        v = by["view AGENTS.md"]
+        self.assertEqual(v["carried_cache_read"] + v["carried_fresh"], v["carried"])
+        self.assertGreater(v["carried_cache_read"], 0)
+        self.assertIsNone(by["git log"]["carried_cache_read"])  # older CLI: no usage per call
+
+    def test_codex_and_claude_have_the_split(self):
+        outs, _ = claude_outputs(os.path.join(FIX, "claude"), since=SINCE, until=UNTIL)
+        self.assertTrue(all(o["carried_cache_read"] is not None for o in outs))
 
 
 class Advice(unittest.TestCase):

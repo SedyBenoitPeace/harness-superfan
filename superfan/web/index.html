@@ -510,7 +510,7 @@ function catDrill(s, v) {
       <td class="num">${it.calls}${it.re_reads ? `<div class="muted">${it.re_reads} re-read${it.re_reads === 1 ? "" : "s"}</div>` : ""}</td>
       <td class="num">${tok(it.max_output)}</td><td class="num">${tok(it.carried_tokens)}${cc && it.carried_usd != null ? `<div class="muted">${usd(it.carried_usd)}</div>` : ""}</td></tr>` +
       (it.hint ? `<tr class="hint"><td colspan="5"><span class="try">Try:</span> ${esc(it.hint)}</td></tr>` : "")).join("");
-  return `<div class="sub" style="margin-bottom:6px">${v.calls} calls printed ${tok(v.output_tokens)}, carried into ${tok(v.carried_tokens)} of later prompts.</div>
+  return `<div class="sub" style="margin-bottom:6px">${v.calls} calls printed ${tok(v.output_tokens)}, carried into ${tok(v.carried_tokens)} of later prompts${v.carried_cache_read != null ? `, ${tok(v.carried_cache_read)} of it as cache reads` : ""}.</div>
     ${roles.length > 1 ? `<div class="stack" style="margin-bottom:4px">${roles.map(([r, x]) => `<span style="flex:${x};background:var(${RCOL[r]})" data-tip="${ROLE[r]}: ${tok(x)}"></span>`).join("")}</div>` : ""}
     <div class="legend" style="margin-bottom:8px">${roles.map(([r, x]) => `<span><i style="background:var(${RCOL[r]})"></i>${ROLE[r]}${r === "worker" ? "s" : ""} ${pct(x / t)}</span>`).join("")}</div>
     <div class="scroll"><table><thead><tr><th>File or command</th><th>Who</th><th class="num">Calls</th><th class="num">Largest</th><th class="num">Carried</th></tr></thead><tbody>${rows}</tbody></table></div>
@@ -561,7 +561,7 @@ function breakdowns() {
 function catDetail(h, k, v) {
   const cc = h === "claude-code", t = v.carried_tokens || 1;
   const roles = Object.entries(v.by_role || {}).sort((a, b) => b[1] - a[1]);
-  return `<div class="row" style="margin-bottom:6px"><div class="sub">${v.tool_calls} calls printed ${tok(v.output_tokens)} tokens (avg ${tok(v.output_tokens / v.tool_calls)}), carried into ${tok(v.carried_tokens)} tokens of later prompts.</div>
+  return `<div class="row" style="margin-bottom:6px"><div class="sub">${v.tool_calls} calls printed ${tok(v.output_tokens)} tokens (avg ${tok(v.output_tokens / v.tool_calls)}), carried into ${tok(v.carried_tokens)} tokens of later prompts${v.carried_cache_read != null ? `, ${tok(v.carried_cache_read)} of it as cache reads` : ""}.</div>
       <div class="legend">${roles.map(([r, x]) => `<span><i style="background:var(${RCOL[r]})"></i>${ROLE[r]}${r === "worker" ? "s" : ""} ${pct(x / t)}</span>`).join("")}</div></div>
     <div class="stack" style="margin-bottom:12px">${roles.map(([r, x]) => `<span style="flex:${x};background:var(${RCOL[r]})" data-tip="${ROLE[r]}: ${tok(x)}"></span>`).join("")}</div>
     <div class="grid2"><div><h3>Commands and files</h3><div class="scroll"><table><thead><tr><th>What ran</th><th class="num">Calls</th><th class="num">Avg printed</th><th class="num">Largest</th><th class="num">Carried</th>${cc ? `<th class="num">≈ $</th>` : ""}</tr></thead><tbody>` +
