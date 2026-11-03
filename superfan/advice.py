@@ -216,6 +216,41 @@ def advise(s: dict, outputs: list, orchestrator_limit: float = 0.40, output_limi
     return tips
 
 
+def token_split(s: dict, outputs: list) -> list:
+    """Rows for orchestrator, workers and all: the prompt split into fresh input,
+    cache read and cache write per model call, output, and the tool-output carry
+    (and its file-read part) split into cache read and fresh. When the logs have
+    no per-call usage (older Copilot CLIs) the carry split is estimated from the
+    group's overall cache share and flagged `<x>_estimated`."""
+    groups = [("orchestrator", lambda r: r != "worker"), ("workers", lambda r: r == "worker"), ("all", lambda r: True)]
+    rows = []
+    for name, keep in groups:
+        ags = [a for a in s.get("agents", []) if keep(a["role"])]
+        outs = [o for o in outputs if keep(o["role"])]
+        if not ags and not outs:
+            continue
+        t = {k: sum(a["tokens"].get(k, 0) for a in ags) for k in ("input", "cache_read", "cache_write", "output")}
+        row = {"group": name, "agents": len(ags), "calls": sum(a["model_calls"] for a in ags), **t,
+               "prompt": t["input"] + t["cache_read"] + t["cache_write"]}
+        for pre, xs in (("carried", outs), ("reads", [o for o in outs if o["category"] == "reading files"])):
+            known = [o for o in xs if o.get("carried_cache_read") is not None]
+            row[pre] = sum(o["carried"] for o in xs)
+            row[pre + "_cache_read"] = sum(o["carried_cache_read"] for o in known) if known else None
+            row[pre + "_fresh"] = sum(o["carried_fresh"] for o in known) if known else None
+            row[pre + "_estimated"] = False
+            if not known and row[pre] and row["prompt"]:
+                # no usage per call: the first call after each output takes it fresh, the rest at the
+                # group's overall cache-read share. An estimate, and the page says so.
+                first = sum(o["tokens"] for o in xs if o["calls_after"] > 0)
+                read = round((row[pre] - first) * t["cache_read"] / row["prompt"])
+                row[pre + "_cache_read"], row[pre + "_fresh"] = read, row[pre] - read
+                row[pre + "_estimated"] = True
+        rows.append(row)
+    if len(rows) == 3 and rows[1]["agents"] == 0 and not rows[1]["carried"]:
+        rows = [rows[0]]  # no subagents: one row is enough
+    return rows
+
+
 def session_detail(s: dict, outputs: list, orchestrator_limit: float, output_limit: int) -> dict:
     cats: dict = {}
     for o in outputs:
@@ -223,10 +258,13 @@ def session_detail(s: dict, outputs: list, orchestrator_limit: float, output_lim
         c["calls"] += 1
         c["carried_tokens"] += o["carried"]
         c["output_tokens"] += o["tokens"]
+        if o.get("carried_cache_read") is not None:
+            c["carried_cache_read"] = c.get("carried_cache_read", 0) + o["carried_cache_read"]
     for k, d in drill(outputs).items():
         cats[k].update(d)
     top = sorted(outputs, key=lambda o: -o["carried"])[:15]
     return {
+        "split": token_split(s, outputs),
         "categories": dict(sorted(cats.items(), key=lambda kv: -kv[1]["carried_tokens"])),
         "largest": [{**{k: o[k] for k in ("agent", "role", "category", "label", "tokens", "calls_after", "carried",
                                           "carried_usd")},

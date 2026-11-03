@@ -59,6 +59,7 @@ python3 -m superfan scan --claude ~/.claude/projects --codex ~/.codex/sessions \
 
 # the 5 largest, as a Markdown table (--by cost for Claude Code dollars)
 python3 -m superfan top sessions.json --n 5
+python3 -m superfan carry <session> --harness copilot   # token split + carry split for one session
 
 # health rules (see below); --reports takes the kit's docs/runs folders, a
 # project folder, or a folder of projects (every <project>/docs/runs inside);
@@ -210,7 +211,10 @@ Each finding names the session, the agent, the tokens and why it matters.
 `superfan.breakdown` (`codex_outputs`, `claude_outputs`, `copilot_outputs`, `summarise`) groups
 tool calls by kind of work and estimates the tokens each kind keeps in
 context: output size times the model calls that follow it in the same
-thread. It is an estimate (characters / 4, no compaction). A call is grouped
+thread. It is an estimate (characters / 4, no compaction). The carry is also split
+into `carried_cache_read` and `carried_fresh`: the first call after an output
+takes it as new prompt, and each later call takes it at that call's own
+cache-read share (the logs report cache hits per call, not per output). A call is grouped
 first by its tool name (`TOOL_CATEGORIES`: Read, apply_patch, spawn_agent,
 MCP tools...), then a shell call by its first command (`DEFAULT_CATEGORIES`:
 kit scripts, skills and agent docs, reading files, simulator, build, git...).
