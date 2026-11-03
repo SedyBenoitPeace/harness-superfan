@@ -95,6 +95,26 @@ class CacheSplit(unittest.TestCase):
         self.assertTrue(all(o["carried_cache_read"] is not None for o in outs))
 
 
+class TokenSplit(unittest.TestCase):
+    def test_rows_and_estimate(self):
+        from superfan.advice import token_split
+        from superfan.parse import scan_copilot
+        root = os.path.join(FIX, "copilot")
+        outs, _ = copilot_outputs(root, since=SINCE, until=UNTIL)
+        for sid, sess in scan_copilot(root, SINCE, UNTIL).items():
+            s = sess.summary()
+            rows = token_split(s, [o for o in outs if o["session"] == sid])
+            self.assertEqual([r["group"] for r in rows], ["orchestrator", "workers", "all"])
+            a = rows[-1]
+            self.assertEqual(a["prompt"], a["input"] + a["cache_read"] + a["cache_write"])
+            if a["carried"]:
+                self.assertEqual(a["carried_cache_read"] + a["carried_fresh"], a["carried"])
+        # 0002 is the older CLI: no usage per call, so its split is an estimate
+        old = [r for sid, sess in scan_copilot(root, SINCE, UNTIL).items() if sid.endswith("0002")
+               for r in token_split(sess.summary(), [o for o in outs if o["session"] == sid])]
+        self.assertTrue(any(r["carried_estimated"] for r in old if r["carried"]))
+
+
 class Advice(unittest.TestCase):
     def test_orchestrator_tip(self):
         [s] = scan(codex_root=os.path.join(FIX, "codex"), since=SINCE, until=UNTIL)

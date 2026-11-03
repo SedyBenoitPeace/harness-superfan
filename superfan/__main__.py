@@ -116,40 +116,27 @@ def cmd_carry(a: argparse.Namespace) -> int:
     sid = s["session_id"]
     outs = [o for o in outs if o["session"] == sid]
     print(f"## {a.harness} {sid[:8]} ({s['start'] or '?'} to {s['end'] or '?'})\n")
-    print("### Tokens billed per model call\n")
-    print("| agents | calls | prompt | fresh input | cache read | cache write | output |")
+    from .advice import token_split
+    rows = token_split(s, outs)
+    print("### How the prompt was paid, per model call\n")
+    print("| who | calls | prompt | fresh input | cache write | cache read | output |")
     print("|---|---|---|---|---|---|---|")
-    groups = {"orchestrator": [r for r in s["agents"] if r["role"] != "worker"],
-              "workers": [r for r in s["agents"] if r["role"] == "worker"]}
-    for name, rows in list(groups.items()) + [("all", s["agents"])]:
-        if not rows:
-            continue
-        t = {k: sum(r["tokens"][k] for r in rows) for k in ("input", "cache_read", "cache_write", "output")}
-        pr = t["input"] + t["cache_read"] + t["cache_write"]
-        print(f"| {name} ({len(rows)}) | {sum(r['model_calls'] for r in rows)} | {fmt_tok(pr)} | "
-              f"{fmt_tok(t['input'])} ({_pct(t['input'], pr)}) | {fmt_tok(t['cache_read'])} ({_pct(t['cache_read'], pr)}) | "
-              f"{fmt_tok(t['cache_write'])} ({_pct(t['cache_write'], pr)}) | {fmt_tok(t['output'])} |")
-    print("\n### Tool-output carry (output size x later calls), split by how later calls took it\n")
-    print("| scope | outputs | output tokens | carried | as cache read | as fresh / cache write |")
-    print("|---|---|---|---|---|---|")
-    def row(label, xs):
-        car = sum(o["carried"] for o in xs)
-        known = [o for o in xs if o["carried_cache_read"] is not None]
-        if known:
-            cr = sum(o["carried_cache_read"] for o in known)
-            fr = sum(o["carried_fresh"] for o in known)
-            tail = f"{fmt_tok(cr)} ({_pct(cr, cr + fr)}) | {fmt_tok(fr)} ({_pct(fr, cr + fr)})"
-        else:
-            tail = "— | —"
-        print(f"| {label} | {len(xs)} | {fmt_tok(sum(o['tokens'] for o in xs))} | {fmt_tok(car)} | {tail} |")
-    for role in ("orchestrator", "worker"):
-        xs = [o for o in outs if (o["role"] == "worker") == (role == "worker")]
-        if xs:
-            row(f"all outputs, {role}", xs)
-            rd = [o for o in xs if o["category"] == "reading files"]
-            if rd:
-                row(f"reading files, {role}", rd)
-    row("all outputs, everyone", outs)
+    for r in rows:
+        pr = r["prompt"]
+        print(f"| {r['group']} ({r['agents']}) | {r['calls']} | {fmt_tok(pr)} | {fmt_tok(r['input'])} ({_pct(r['input'], pr)}) | "
+              f"{fmt_tok(r['cache_write'])} ({_pct(r['cache_write'], pr)}) | {fmt_tok(r['cache_read'])} ({_pct(r['cache_read'], pr)}) | "
+              f"{fmt_tok(r['output'])} |")
+    print("\n### Re-sent tool output (output size x later calls), split by how later calls took it\n")
+    print("| who | re-sent | share of prompt | as cache read | as fresh / cache write | of it file reads | file reads as cache read |")
+    print("|---|---|---|---|---|---|---|")
+    def part(r, pre, k):
+        v = r[f"{pre}_{k}"]
+        return "—" if v is None else f"{'~' if r[pre + '_estimated'] else ''}{fmt_tok(v)} ({_pct(v, r[pre])})"
+    for r in rows:
+        print(f"| {r['group']} | {fmt_tok(r['carried'])} | {_pct(r['carried'], r['prompt'])} | {part(r, 'carried', 'cache_read')} | "
+              f"{part(r, 'carried', 'fresh')} | {fmt_tok(r['reads'])} | {part(r, 'reads', 'cache_read')} |")
+    if any(r["carried_estimated"] for r in rows):
+        print("\n~ estimated: no usage per model call in this log, so the cache share comes from the session totals.")
     return 0
 
 
