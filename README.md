@@ -76,6 +76,11 @@ python3 -m superfan check --codex ~/.codex/sessions --reports ~/src/app/docs/run
 python3 -m superfan serve --reports ~/src ~/work   # folders of projects
 ```
 
+On macOS, if a Chrome tab already shows the page, `serve` reloads that tab and
+brings it to the front instead of opening a new one (the first time, macOS
+asks whether your terminal may control Chrome). Elsewhere, or with another
+browser, it opens a new tab; `--no-open` opens nothing.
+
 Opens `http://127.0.0.1:8765` with a **Refresh** button (re-reads the logs for the current window and keeps the filter; a run older than 5 minutes refreshes on page load), a window picker
 (24 hours to 90 days) and a harness filter (All, Claude Code, Codex, Copilot) that
 applies to the whole page. Reading starts as soon as `serve` starts, and while

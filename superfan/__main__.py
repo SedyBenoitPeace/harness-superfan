@@ -251,6 +251,48 @@ def cmd_review(a: argparse.Namespace) -> int:
     return 1 if r["errors"] and len(r["errors"]) == len(engines) else 0
 
 
+# Finds a Chrome tab already showing the page, reloads it (the server may have
+# new code) and brings it to the front. Prints "found" or "none".
+_CHROME_FOCUS = """
+on run argv
+  set prefix to item 1 of argv
+  if application "Google Chrome" is not running then return "none"
+  tell application "Google Chrome"
+    repeat with w in windows
+      set i to 0
+      repeat with t in tabs of w
+        set i to i + 1
+        if URL of t starts with prefix then
+          set active tab index of w to i
+          set index of w to 1
+          reload t
+          activate
+          return "found"
+        end if
+      end repeat
+    end repeat
+  end tell
+  return "none"
+end run
+"""
+
+
+def open_page(url: str) -> None:
+    """Show the page: on macOS reuse an open Chrome tab on this address,
+    otherwise open a new tab in the default browser."""
+    import subprocess
+    import webbrowser
+    if sys.platform == "darwin":
+        try:
+            r = subprocess.run(["osascript", "-e", _CHROME_FOCUS, url.rstrip("/")],
+                               capture_output=True, text=True, timeout=5)
+            if r.stdout.strip() == "found":
+                return
+        except (OSError, subprocess.SubprocessError):
+            pass
+    webbrowser.open(url)
+
+
 def cmd_serve(a: argparse.Namespace) -> int:
     from .serve import serve
     cfg = _cfg(a)
@@ -258,8 +300,7 @@ def cmd_serve(a: argparse.Namespace) -> int:
     cfg["process_check"] = not a.no_process_check
     if not a.no_open:
         import threading
-        import webbrowser
-        threading.Timer(0.8, webbrowser.open, [f"http://127.0.0.1:{a.port}/"]).start()
+        threading.Timer(0.8, open_page, [f"http://127.0.0.1:{a.port}/"]).start()
     serve(cfg)
     return 0
 
