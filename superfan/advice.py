@@ -223,6 +223,8 @@ def session_detail(s: dict, outputs: list, orchestrator_limit: float, output_lim
         c["calls"] += 1
         c["carried_tokens"] += o["carried"]
         c["output_tokens"] += o["tokens"]
+        if o.get("carried_cache_read") is not None:
+            c["carried_cache_read"] = c.get("carried_cache_read", 0) + o["carried_cache_read"]
     for k, d in drill(outputs).items():
         cats[k].update(d)
     top = sorted(outputs, key=lambda o: -o["carried"])[:15]
