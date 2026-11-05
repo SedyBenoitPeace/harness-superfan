@@ -63,11 +63,22 @@ class Classify(unittest.TestCase):
         self.assertEqual(live.parse_win(json.dumps(rows[2]))[0]["pid"], 20)  # one process: an object, not a list
 
     def test_parse_mac_output(self):
-        comm = "  101     1 /Users/u/Library/Application Support/Claude/claude-code/2.1.0/claude\n  202     1 /bin/zsh\n  303     1 /Applications/Claude.app/Contents/MacOS/Claude\n"
+        comm = ("  101     1 Wed Nov  5 10:00:00 2026 /Users/u/Library/Application Support/Claude/claude-code/2.1.0/claude\n"
+                "  202     1 Wed Nov  5 09:00:00 2026 /bin/zsh\n  303     1 Tue Nov  4 08:00:00 2026 /Applications/Claude.app/Contents/MacOS/Claude\n")
         args = "  101 /Users/u/Library/Application Support/Claude/claude-code/2.1.0/claude --resume\n  202 -zsh\n  303 /Applications/Claude.app/Contents/MacOS/Claude\n"
-        procs = live.parse_ps(comm, args)
+        parents = {}
+        procs = live.parse_ps(comm, args, parents)
         self.assertEqual([(p["harness"], p["pid"]) for p in procs], [("claude-code", 101)])
-        self.assertEqual(live.parse_lsof("p101\nfcwd\nn/Users/u/Source/app\n"), {101: "/Users/u/Source/app"})
+        self.assertEqual(procs[0]["start"], live.datetime(2026, 11, 5, 10, 0, 0).timestamp())
+        self.assertEqual(parents, {101: 1, 202: 1, 303: 1})
+        out = "p101\nfcwd\nn/Users/u/Source/app\nf12\nn/Users/u/.codex/sessions/2026/11/05/rollout-x.jsonl\nf13\nn/dev/null\n"
+        self.assertEqual(live.parse_lsof(out), ({101: "/Users/u/Source/app"}, {101: ["/Users/u/.codex/sessions/2026/11/05/rollout-x.jsonl"]}))
+
+    def test_helpers_and_grandchildren_count_once(self):
+        procs = [{"harness": "codex", "pid": 10, "ppid": 1}, {"harness": "codex", "pid": 30, "ppid": 20},
+                 {"harness": "codex", "pid": 40, "ppid": 1}]
+        parents = {10: 1, 20: 10, 30: 20, 40: 1}  # 30 is a grandchild of 10, through a shell (20)
+        self.assertEqual([p["pid"] for p in live._dedupe(procs, parents)], [10, 40])
 
 
 def _s(h, sid, cwd, age, ended=False, now=1_000_000.0):
@@ -106,6 +117,33 @@ class States(unittest.TestCase):
                            ("copilot", "d", "/w/x", 10, True))
         live.assign_states(ss, None, self.NOW)
         self.assertEqual({k[1]: v["state"] for k, v in ss.items()}, {"a": "working", "b": "idle", "c": "ended", "d": "ended"})
+
+    def test_a_process_cannot_own_a_log_last_written_before_it_started(self):
+        # The reported case: two sessions working now, older ones in the same folder last
+        # written 17-19 hours ago, and CLI processes in that folder that started this morning.
+        ss = self.sessions(("codex", "now1", "/w/app", 4), ("codex", "now2", "/w/app", 11),
+                           ("codex", "old1", "/w/app", 16.9 * 3600), ("codex", "old2", "/w/app", 18 * 3600),
+                           ("codex", "old3", "/w/app", 18.9 * 3600))
+        morning = self.NOW - 3 * 3600
+        procs = [{"harness": "codex", "pid": i, "cwd": "/w/app", "start": morning + i} for i in range(1, 6)]
+        live.assign_states(ss, procs, self.NOW)
+        self.assertEqual({k[1]: v["state"] for k, v in ss.items()},
+                         {"now1": "working", "now2": "working", "old1": "ended", "old2": "ended", "old3": "ended"})
+        # a process started before the old session was last written can still own it (a long-lived app)
+        procs = [{"harness": "codex", "pid": 9, "cwd": "/w/app", "start": self.NOW - 30 * 3600}]
+        ss = self.sessions(("codex", "old1", "/w/app", 16.9 * 3600))
+        live.assign_states(ss, procs, self.NOW)
+        self.assertEqual(ss[("codex", "old1")]["state"], "waiting")
+
+    def test_open_log_file_is_exact(self):
+        ss = self.sessions(("copilot", "x", "/w/p", 18 * 3600), ("copilot", "y", "/w/p", 600))
+        ss[("copilot", "x")]["files"] = ["/logs/x/events.jsonl"]
+        ss[("copilot", "y")]["files"] = ["/logs/y/events.jsonl"]
+        # one process, started long ago, holding x's log: x is open, y is not (even though y is newer)
+        procs = [{"harness": "copilot", "pid": 1, "cwd": "/w/p", "start": self.NOW - 40 * 3600, "files": ["/logs/x/events.jsonl"]}]
+        live.assign_states(ss, procs, self.NOW)
+        self.assertEqual({k[1]: (v["state"], v["by"]) for k, v in ss.items()},
+                         {"x": ("waiting", "log file open"), "y": ("ended", "no process")})
 
     def test_superfan_ask_folders_are_not_sessions(self):
         ss = self.sessions(("claude-code", "a", "/w/app", 900))

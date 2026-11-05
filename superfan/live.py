@@ -109,17 +109,39 @@ def _norm(p: str | None) -> str | None:
     return os.path.normcase(p.rstrip("/\\")) or None
 
 
-def _dedupe(procs: list) -> list:
-    """A wrapper and the binary it starts (npm shim -> native codex) are one CLI."""
-    pids = {(p["harness"], p["pid"]) for p in procs}
-    return [p for p in procs if (p["harness"], p.get("ppid")) not in pids]
+def _dedupe(procs: list, parents: dict | None = None) -> list:
+    """A CLI and every process it starts (npm shim -> native codex, helpers, a
+    subagent run as a child process) count once: drop a process when any of its
+    ancestors is a process of the same CLI. `parents` maps every pid to its
+    parent pid; without it only the direct parent is checked."""
+    parents = dict(parents or {})
+    for p in procs:
+        parents.setdefault(p["pid"], p.get("ppid"))
+    mine = {(p["harness"], p["pid"]) for p in procs}
+    out = []
+    for p in procs:
+        q, seen, nested = parents.get(p["pid"]), set(), False
+        while q and q not in seen:
+            if (p["harness"], q) in mine:
+                nested = True
+                break
+            seen.add(q)
+            q = parents.get(q)
+        if not nested:
+            out.append(p)
+    return out
+
+
+def _session_files(paths) -> list:
+    return [x for x in paths if x and x.endswith(".jsonl")]
 
 
 def _psutil_procs():
     import psutil  # optional
-    out = []
-    for pr in psutil.process_iter(["pid", "ppid", "cmdline", "exe"]):
+    out, parents = [], {}
+    for pr in psutil.process_iter(["pid", "ppid", "cmdline", "exe", "create_time"]):
         info = pr.info
+        parents[info["pid"]] = info.get("ppid")
         h = classify(info.get("cmdline") or [], info.get("exe") or "")
         if not h:
             continue
@@ -127,46 +149,83 @@ def _psutil_procs():
             cwd = pr.cwd()
         except Exception:
             cwd = None
-        out.append({"harness": h, "pid": info["pid"], "ppid": info.get("ppid"), "cwd": cwd})
-    return out
+        try:
+            files = _session_files(f.path for f in pr.open_files())
+        except Exception:
+            files = []
+        out.append({"harness": h, "pid": info["pid"], "ppid": info.get("ppid"), "cwd": cwd,
+                    "start": info.get("create_time"), "files": files})
+    return out, parents
 
 
 def _linux_procs():
-    out = []
+    out, parents = [], {}
+    try:
+        with open("/proc/stat") as fh:
+            btime = next(int(x.split()[1]) for x in fh if x.startswith("btime"))
+        ticks = os.sysconf("SC_CLK_TCK")
+    except (OSError, StopIteration, ValueError):
+        btime, ticks = None, None
     for pid in os.listdir("/proc"):
         if not pid.isdigit():
             continue
         try:
+            with open(f"/proc/{pid}/stat") as fh:
+                fields = fh.read().rsplit(")", 1)[1].split()
+            ppid = int(fields[1])
+            parents[int(pid)] = ppid
             with open(f"/proc/{pid}/cmdline", "rb") as fh:
                 argv = [a.decode(errors="replace") for a in fh.read().split(b"\0") if a]
             h = classify(argv)
             if not h:
                 continue
-            with open(f"/proc/{pid}/stat") as fh:
-                ppid = int(fh.read().rsplit(")", 1)[1].split()[1])
+            start = btime + int(fields[19]) / ticks if btime and ticks else None
             try:
                 cwd = os.readlink(f"/proc/{pid}/cwd")
             except OSError:
                 cwd = None
-            out.append({"harness": h, "pid": int(pid), "ppid": ppid, "cwd": cwd})
+            files = []
+            try:
+                for fd in os.listdir(f"/proc/{pid}/fd"):
+                    try:
+                        files.append(os.readlink(f"/proc/{pid}/fd/{fd}"))
+                    except OSError:
+                        pass
+            except OSError:
+                pass
+            out.append({"harness": h, "pid": int(pid), "ppid": ppid, "cwd": cwd, "start": start,
+                        "files": _session_files(files)})
         except (OSError, ValueError, IndexError):
             continue
-    return out
+    return out, parents
 
 
-def _run(cmd: list, timeout: float = 5.0) -> str:
+def _run(cmd: list, timeout: float = 5.0, env: dict | None = None) -> str:
     kw = {"creationflags": 0x08000000} if sys.platform == "win32" else {}  # CREATE_NO_WINDOW
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, **kw).stdout
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env, **kw).stdout
 
 
-def parse_ps(comm_out: str, args_out: str) -> list:
-    """`ps -axo pid=,ppid=,comm=` and `ps -axo pid=,args=` -> matched processes (no cwd yet).
-    comm is the executable path (may hold spaces), args the full command line."""
-    exe, ppids = {}, {}
+def _lstart(words: list) -> float | None:
+    """`ps -o lstart` in the C locale: 'Wed Nov  5 10:00:00 2026', local time."""
+    try:
+        return datetime.strptime(" ".join(words), "%a %b %d %H:%M:%S %Y").timestamp()
+    except ValueError:
+        return None
+
+
+def parse_ps(comm_out: str, args_out: str, parents: dict | None = None) -> list:
+    """`ps -axo pid=,ppid=,lstart=,comm=` and `ps -axo pid=,args=` -> matched processes (no cwd
+    yet). comm is the executable path (may hold spaces), args the full command line.
+    Fills `parents` with every pid's parent."""
+    exe, ppids, starts = {}, {}, {}
     for line in comm_out.splitlines():
-        parts = line.strip().split(None, 2)
-        if len(parts) == 3 and parts[0].isdigit():
-            exe[int(parts[0])], ppids[int(parts[0])] = parts[2], int(parts[1]) if parts[1].isdigit() else None
+        parts = line.strip().split(None, 7)
+        if len(parts) == 8 and parts[0].isdigit():
+            pid = int(parts[0])
+            exe[pid], ppids[pid] = parts[7], int(parts[1]) if parts[1].isdigit() else None
+            starts[pid] = _lstart(parts[2:7])
+    if parents is not None:
+        parents.update(ppids)
     out = []
     for line in args_out.splitlines():
         parts = line.strip().split(None, 1)
@@ -176,35 +235,44 @@ def parse_ps(comm_out: str, args_out: str) -> list:
         argv = parts[1].split()
         h = classify(argv, exe.get(pid, ""), windows=False)
         if h:
-            out.append({"harness": h, "pid": pid, "ppid": ppids.get(pid), "cwd": None})
+            out.append({"harness": h, "pid": pid, "ppid": ppids.get(pid), "cwd": None,
+                        "start": starts.get(pid), "files": []})
     return out
 
 
-def parse_lsof(out: str) -> dict:
-    """`lsof -a -d cwd -p 1,2 -Fpn` -> {pid: cwd}."""
-    cwd, pid = {}, None
+def parse_lsof(out: str) -> tuple[dict, dict]:
+    """`lsof -p 1,2 -Fpfn` -> ({pid: cwd}, {pid: [open .jsonl files]})."""
+    cwd, files, pid, fd = {}, {}, None, None
     for line in out.splitlines():
         if line.startswith("p") and line[1:].isdigit():
-            pid = int(line[1:])
+            pid, fd = int(line[1:]), None
+        elif line.startswith("f"):
+            fd = line[1:]
         elif line.startswith("n") and pid is not None:
-            cwd[pid] = line[1:]
-    return cwd
+            if fd == "cwd":
+                cwd[pid] = line[1:]
+            elif line.endswith(".jsonl"):
+                files.setdefault(pid, []).append(line[1:])
+    return cwd, files
 
 
 def _mac_procs():
-    procs = parse_ps(_run(["ps", "-axo", "pid=,ppid=,comm="]), _run(["ps", "-axo", "pid=,args="]))
+    env = {**os.environ, "LC_ALL": "C"}  # English day and month names in lstart
+    parents: dict = {}
+    procs = parse_ps(_run(["ps", "-axo", "pid=,ppid=,lstart=,comm="], env=env),
+                     _run(["ps", "-axo", "pid=,args="], env=env), parents)
     if procs:
-        cwd = parse_lsof(_run(["lsof", "-a", "-d", "cwd", "-p", ",".join(str(p["pid"]) for p in procs), "-Fpn"]))
+        cwd, files = parse_lsof(_run(["lsof", "-w", "-p", ",".join(str(p["pid"]) for p in procs), "-Fpfn"]))
         for p in procs:
-            p["cwd"] = cwd.get(p["pid"])
-    return procs
+            p["cwd"], p["files"] = cwd.get(p["pid"]), files.get(p["pid"], [])
+    return procs, parents
 
 
-WIN_QUERY = ("Get-CimInstance Win32_Process | Where-Object { $_.CommandLine } | "
-             "Select-Object ProcessId,ParentProcessId,ExecutablePath,CommandLine | ConvertTo-Json -Compress")
+WIN_QUERY = ("Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,ExecutablePath,CommandLine,"
+             "@{n='Start';e={([DateTimeOffset]$_.CreationDate).ToUnixTimeSeconds()}} | ConvertTo-Json -Compress")
 
 
-def parse_win(out: str) -> list:
+def parse_win(out: str, parents: dict | None = None) -> list:
     try:
         rows = json.loads(out or "[]")
     except ValueError:
@@ -213,30 +281,37 @@ def parse_win(out: str) -> list:
         rows = [rows]
     procs = []
     for r in rows:
+        if parents is not None and r.get("ProcessId") is not None:
+            parents[r["ProcessId"]] = r.get("ParentProcessId")
+        if not r.get("CommandLine"):
+            continue
         h = classify(split_command(r.get("CommandLine") or ""), r.get("ExecutablePath") or "", windows=True)
         if h:
-            procs.append({"harness": h, "pid": r.get("ProcessId"), "ppid": r.get("ParentProcessId"), "cwd": None})
+            procs.append({"harness": h, "pid": r.get("ProcessId"), "ppid": r.get("ParentProcessId"), "cwd": None,
+                          "start": r.get("Start"), "files": []})
     return procs
 
 
 def _win_procs():
-    return parse_win(_run(["powershell", "-NoProfile", "-NonInteractive", "-Command", WIN_QUERY], timeout=10))
+    parents: dict = {}
+    procs = parse_win(_run(["powershell", "-NoProfile", "-NonInteractive", "-Command", WIN_QUERY], timeout=10), parents)
+    return procs, parents
 
 
 def list_processes() -> tuple[list | None, str]:
     """(processes, method). None when this machine gives no process information."""
     try:
         import psutil  # noqa: F401
-        return _dedupe(_psutil_procs()), "psutil"
+        return _dedupe(*_psutil_procs()), "psutil"
     except ImportError:
         pass
     try:
         if sys.platform.startswith("linux"):
-            return _dedupe(_linux_procs()), "proc"
+            return _dedupe(*_linux_procs()), "proc"
         if sys.platform == "darwin":
-            return _dedupe(_mac_procs()), "ps+lsof"
+            return _dedupe(*_mac_procs()), "ps+lsof"
         if sys.platform == "win32":
-            return _dedupe(_win_procs()), "windows"
+            return _dedupe(*_win_procs()), "windows"
     except (OSError, subprocess.SubprocessError):
         return None, "failed"
     return None, "unsupported"
@@ -372,32 +447,55 @@ class Index:
             return out
 
 
+START_SLACK_S = 5  # clock rounding between a process's start time and a file's mtime
+
+
 def assign_states(sessions: dict, procs: list | None, now: float) -> None:
-    """Sets state, age_s and how it was decided on every session (in place)."""
+    """Sets state, age_s and how it was decided on every session (in place).
+
+    A running CLI process accounts for at most one session, matched in this order:
+    1. the session whose log file it holds open (exact; macOS, Linux, psutil);
+    2. otherwise the most recently written session in its working folder (any folder
+       on Windows, which does not give it) that was written after the process started:
+       a process started this morning cannot be the one that wrote a log last
+       touched yesterday and not since.
+    A session with no process left over has ended."""
     flagged: dict = {}
     if procs is not None:
+        by_file = {}
+        for s in sessions.values():
+            for f in s["files"]:
+                by_file[_norm(f)] = s
         for h in HARNESSES:
             mine = [p for p in procs if p["harness"] == h]
-            cands = sorted((s for s in sessions.values() if s["harness"] == h and not s["ended"]),
-                           key=lambda s: -s["mtime"])
-            by_cwd: dict = {}
-            blind = 0
+            left = []
             for p in mine:
                 c = _norm(p.get("cwd"))
                 if c and os.path.basename(c).startswith("superfan-ask-"):
                     continue
-                if c:
-                    by_cwd[c] = by_cwd.get(c, 0) + 1
+                held = [by_file.get(_norm(f)) for f in p.get("files") or []]
+                held = [x for x in held if x is not None and x["harness"] == h and not x["ended"]]
+                if held:
+                    for x in held:
+                        flagged[id(x)] = "log file open"
                 else:
-                    blind += 1
-            for c, k in by_cwd.items():
-                slug = claude_slug(c)
-                match = [s for s in cands if _norm(s["cwd"]) == c or (h == "claude-code" and s.get("slug") == slug)]
-                for s in match[:k]:
-                    flagged[id(s)] = "process"
-            rest = [s for s in cands if id(s) not in flagged]
-            for s in rest[:blind]:
-                flagged[id(s)] = "process count"
+                    left.append(p)
+            cands = sorted((s for s in sessions.values() if s["harness"] == h and not s["ended"] and id(s) not in flagged),
+                           key=lambda s: -s["mtime"])
+            # newest processes first: they are the likeliest owners of the newest logs
+            for p in sorted(left, key=lambda p: -(p.get("start") or 0)):
+                c = _norm(p.get("cwd"))
+                slug = claude_slug(c) if c else None
+                start = p.get("start")
+                for s in cands:
+                    if id(s) in flagged:
+                        continue
+                    if c and not (_norm(s["cwd"]) == c or (h == "claude-code" and s.get("slug") == slug)):
+                        continue
+                    if start and s["mtime"] < start - START_SLACK_S:
+                        continue
+                    flagged[id(s)] = "process" if c else "process count"
+                    break
     for s in sessions.values():
         age = max(now - s["mtime"], 0)
         s["age_s"] = int(age)
