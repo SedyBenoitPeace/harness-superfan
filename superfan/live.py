@@ -87,7 +87,8 @@ def classify(argv: list, exe: str = "", windows: bool | None = None) -> str | No
     if any(d in low for d in _DESKTOP) or any(d in (exe or "").replace("\\", "/").lower() for d in _DESKTOP):
         return None
     for h, pkg in _PACKAGES.items():
-        if pkg in low:
+        # the package itself, not a sibling like @github/copilot-language-server (Copilot in VS Code)
+        if re.search(re.escape(pkg) + r"(?![\w-])", low):
             return h
     first = _base(exe or (argv[0] if argv else ""), windows)
     if first in _NAMES:
@@ -288,7 +289,7 @@ def parse_win(out: str, parents: dict | None = None) -> list:
         h = classify(split_command(r.get("CommandLine") or ""), r.get("ExecutablePath") or "", windows=True)
         if h:
             procs.append({"harness": h, "pid": r.get("ProcessId"), "ppid": r.get("ParentProcessId"), "cwd": None,
-                          "start": r.get("Start"), "files": []})
+                          "start": r.get("Start"), "files": [], "no_cwd": True})
     return procs
 
 
@@ -485,6 +486,12 @@ def assign_states(sessions: dict, procs: list | None, now: float) -> None:
             # newest processes first: they are the likeliest owners of the newest logs
             for p in sorted(left, key=lambda p: -(p.get("start") or 0)):
                 c = _norm(p.get("cwd"))
+                if c and os.path.dirname(c) == c:
+                    c = None  # "/" or "C:\": an app started by the OS, not a project folder
+                if not c and not p.get("no_cwd"):
+                    # The OS gives working folders here, so a CLI without a usable one (a desktop
+                    # app's background server, say) can only be matched by the log it holds open.
+                    continue
                 slug = claude_slug(c) if c else None
                 start = p.get("start")
                 for s in cands:
