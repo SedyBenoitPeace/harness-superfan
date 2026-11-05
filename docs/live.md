@@ -36,12 +36,19 @@ States:
 
 1. **Ended** if the log has an end marker.
 2. **Working** if a session file was written in the last 2 minutes.
-3. **Open, waiting** if a CLI process runs in the session's folder. With k
-   processes in one folder, the k most recently written sessions there count.
-   Without folders (Windows), the k most recent sessions of that CLI count.
-4. **Ended** if processes were listed and none matched.
+3. **Open, waiting** if a CLI process accounts for it. Each process accounts
+   for at most one session: the one whose log file it holds open, if the OS
+   says so (lsof, `/proc/<pid>/fd`, psutil); otherwise the most recently
+   written session in its working folder (any folder on Windows) that was
+   **written after the process started**. A process started this morning
+   cannot own a log last written yesterday. Processes nested anywhere under
+   another process of the same CLI (helpers, a shell in between) count once.
+4. **Ended** if processes were listed and none accounts for it.
 5. Without process information (`--no-process-check`, or listing failed):
    **Idle** if written in the last 30 minutes, else ended.
+
+Process start times: psutil `create_time`, `/proc/<pid>/stat` field 22,
+`ps -o lstart` (C locale) on macOS, `CreationDate` on Windows.
 
 ## How the Live screen updates
 
