@@ -81,6 +81,15 @@ td.num, th.num { text-align: right; white-space: nowrap; }
 .new { animation: flash 1.2s ease-out; }
 @keyframes flash { from { background: var(--hover); } }
 @media (max-width: 640px) { .hide-sm { display: none; } .grid2 { grid-template-columns: 1fr; } }
+:root { --sp-fresh: #d03b3b; --sp-write: #fab219; --sp-read: #c3c2b7; --sp-carry: #2a78d6; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --sp-fresh: #e05656; --sp-write: #d9a020; --sp-read: #4a4a46; --sp-carry: #3987e5; } }
+:root[data-theme="dark"] { --sp-fresh: #e05656; --sp-write: #d9a020; --sp-read: #4a4a46; --sp-carry: #3987e5; }
+.pstack { display: flex; height: 10px; border-radius: 3px; overflow: hidden; background: var(--grid); }
+.pstack span { display: block; height: 100%; }
+.pstack.thin { height: 4px; margin-top: 3px; background: transparent; }
+.plegend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 4px 0 6px; }
+.plegend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+table.psplit tr.total td { font-weight: 600; }
 </style>
 </head>
 <body>
@@ -102,6 +111,28 @@ const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<
 const tok = (n) => n >= 1e9 ? (n / 1e9).toFixed(2) + "B" : n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? Math.round(n / 1e3) + "k" : String(Math.round(n || 0));
 const usd = (n) => n == null ? "—" : n < 0.01 && n > 0 ? "<$0.01" : "$" + n.toFixed(2);
 const pct = (x) => isFinite(x) ? Math.round(x * 100) + "%" : "—";
+const TIPATTR = "title";
+// Token split: how each group's prompt was paid (fresh / cache read / cache write) and how much of it was
+// tool output re-sent from earlier calls (carried), with that carry split the same way.
+const SPLIT_KINDS = [["input", "Fresh input", "--sp-fresh"], ["cache_write", "Cache write", "--sp-write"], ["cache_read", "Cache read", "--sp-read"]];
+function splitBar(parts, total) {
+  return `<div class="pstack">${parts.filter(([v]) => v > 0).map(([v, label, col]) =>
+    `<span style="width:${Math.max(v / total * 100, 0.6).toFixed(2)}%;background:var(${col})" ${TIPATTR}="${esc(label)}: ${tok(v)} (${pct(v / total)})"></span>`).join("")}</div>`;
+}
+function splitTable(rows) {
+  if (!rows || !rows.length) return "";
+  const GROUP = { orchestrator: "Orchestrator", workers: "Subagents", all: "All" };
+  const legend = `<div class="sub plegend">${SPLIT_KINDS.map(([, l, c]) => `<span><i style="background:var(${c})"></i>${l}</span>`).join("")}<span><i style="background:var(--sp-carry)"></i>of which re-sent tool output</span></div>`;
+  const carry = (r, pre) => r[pre] ? `${tok(r[pre])}${r[pre + "_cache_read"] != null ? ` <span class="muted">· ${r[pre + "_estimated"] ? "~" : ""}${pct(r[pre + "_cache_read"] / r[pre])} cache</span>` : ""}` : "—";
+  return legend + `<div class="scroll"><table class="psplit"><thead><tr><th>Who</th><th class="num">Calls</th><th style="min-width:140px">Prompt tokens</th><th class="num">Prompt</th>
+    <th class="num" ${TIPATTR}="Fresh input / cache write / cache read, share of the prompt">Fresh · write · read</th><th class="num">Output</th>
+    <th class="num" ${TIPATTR}="Tool output re-sent with every later call, and how much of it came from cache">Re-sent output</th><th class="num" ${TIPATTR}="File reads re-sent with later calls">of it file reads</th></tr></thead><tbody>` +
+    rows.map((r) => `<tr class="${r.group === "all" ? "total" : ""}"><td style="white-space:nowrap">${GROUP[r.group] || esc(r.group)}${r.group !== "all" ? ` <span class="muted">${r.agents}</span>` : ""}</td><td class="num">${r.calls}</td>
+      <td>${r.prompt ? splitBar(SPLIT_KINDS.map(([k, l, c]) => [r[k], l, c]), r.prompt) + `<div class="pstack thin"><span style="width:${Math.min(r.carried / r.prompt * 100, 100).toFixed(2)}%;background:var(--sp-carry)" ${TIPATTR}="Re-sent tool output: ${tok(r.carried)} (${pct(r.carried / r.prompt)} of the prompt)"></span></div>` : ""}</td>
+      <td class="num">${tok(r.prompt)}</td><td class="num">${pct(r.input / r.prompt)} · ${pct(r.cache_write / r.prompt)} · ${pct(r.cache_read / r.prompt)}</td><td class="num">${tok(r.output)}</td>
+      <td class="num">${carry(r, "carried")}${r.prompt && r.carried ? `<div class="muted">${pct(r.carried / r.prompt)} of prompt</div>` : ""}</td><td class="num">${carry(r, "reads")}</td></tr>`).join("") +
+    `</tbody></table></div>` + (rows.some((r) => r.carried_estimated) ? `<div class="sub">~ estimated: this CLI version logs no usage per model call, so the re-sent output's cache share comes from the session totals.</div>` : "");
+}
 const ago = (iso) => { if (!iso) return ""; const s = Math.max(0, (Date.now() - new Date(iso)) / 1000); return s < 60 ? Math.round(s) + "s ago" : s < 3600 ? Math.round(s / 60) + "m ago" : s < 172800 ? (s / 3600).toFixed(1) + "h ago" : Math.round(s / 86400) + "d ago"; };
 const clock = (iso) => iso ? new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "";
 const dur = (s) => { const m = Math.round((s || 0) / 60); return m >= 60 ? Math.floor(m / 60) + "h" + String(m % 60).padStart(2, "0") : m + "m"; };
@@ -175,6 +206,7 @@ function render() {
         <div class="gauge"><span style="width:${Math.round(ctxPct * 100)}%"></span></div></section>
     </div>
     <section class="card"><h2>Agents</h2>${agents}</section>
+    ${d.split && d.split.length ? `<section class="card"><h2>How the prompt was paid</h2>${splitTable(d.split)}</section>` : ""}
     <div class="grid2">
       <section class="card"><h2>Recent tool calls</h2>${recent}</section>
       <section class="card"><h2>Rules, checked as it runs</h2>${flags}</section>

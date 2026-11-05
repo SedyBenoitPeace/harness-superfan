@@ -60,6 +60,10 @@ python3 -m superfan scan --claude ~/.claude/projects --codex ~/.codex/sessions \
 # the 5 largest, as a Markdown table (--by cost for Claude Code dollars)
 python3 -m superfan top sessions.json --n 5
 
+# one session: how its prompt was paid (fresh input / cache write / cache read)
+# and how much was re-sent tool output, as Markdown (same numbers as the page)
+python3 -m superfan carry <session id or prefix> --harness copilot --days 45
+
 # health rules (see below); --reports takes the kit's docs/runs folders, a
 # project folder, or a folder of projects (every <project>/docs/runs inside);
 # --tz the UTC offset their local times are in
@@ -71,6 +75,11 @@ python3 -m superfan check --codex ~/.codex/sessions --reports ~/src/app/docs/run
 ```sh
 python3 -m superfan serve --reports ~/src ~/work   # folders of projects
 ```
+
+On macOS, if a Chrome tab already shows the page, `serve` reloads that tab and
+brings it to the front instead of opening a new one (the first time, macOS
+asks whether your terminal may control Chrome). Elsewhere, or with another
+browser, it opens a new tab; `--no-open` opens nothing.
 
 Opens `http://127.0.0.1:8765` with a **Refresh** button (re-reads the logs for the current window and keeps the filter; a run older than 5 minutes refreshes on page load), a window picker
 (24 hours to 90 days) and a harness filter (All, Claude Code, Codex, Copilot) that
@@ -85,8 +94,16 @@ reports whose run falls in the window, and keeps its results in
   models, Claude Code spend by token kind, model and project, tokens by role,
   every health-rule finding).
 - Under All, sessions grouped by project with per-harness numbers; under one
-  harness, a flat list. Click a session for its agents, where its tokens went,
-  its largest tool outputs and **What to improve** (rule-based suggestions).
+  harness, a flat list. Click a session for its agents, **How the prompt was
+  paid**, where its tokens went, its largest tool outputs and **What to
+  improve** (rule-based suggestions).
+- **How the prompt was paid** (session and Live screen): one row each for the
+  orchestrator, the subagents and the whole session. A bar splits every model
+  call's prompt into fresh input, cache write and cache read; a thin blue line
+  under it is the part that was re-sent tool output. Next to it: re-sent
+  output, the share of it that came back as cache reads, and how much of it
+  was file reads. Older Copilot CLIs (e.g. 1.0.90) log no usage per call, so
+  for them the cache share is estimated from the session totals and marked `~`.
   Click a kind of work (reading files, git...) for the files and commands
   behind it: which agents ran them, how often the same agent re-read a file,
   the largest output, tokens carried and a **Try:** hint for each. Click a
@@ -104,7 +121,8 @@ reports whose run falls in the window, and keeps its results in
   below), and read the saved ones, newest first, with Download .md and
   Delete, plus "delete reviews older than N days".
 - **Where tokens go**, one card per harness; click a kind of work for the
-  commands and files behind it, the sessions, and the largest single outputs.
+  commands and files behind it, the sessions, and the largest single outputs,
+  and how much of what it carried was cache reads.
 
 It reads `~/.claude/projects`, `~/.codex/sessions` and
 `~/.copilot/session-state` by default (`--claude ''`, `--codex ''` or
@@ -130,14 +148,19 @@ subscription that is the API-equivalent value, not your bill. Pass
 
 ### Live sessions
 
-The home page has a **Live now** card: every Claude Code, Codex or Copilot
-session open right now, refreshed every 10 seconds, with a dot on its row.
+Live is not a tab. The Sessions page has a **Live now** card above the
+sessions: every Claude Code, Codex or Copilot session open right now on this
+computer, refreshed every 10 seconds, with a dot on its row. **The card is
+hidden while nothing is open**, so start a session (or open `/live`) to see it.
+Sessions in cloud or web apps don't count: they write no logs here.
 Click one (or open `http://127.0.0.1:8765/live`) for its **Live screen**,
 which updates by itself about a second after the agent writes to its log:
 tokens so far (and dollars for Claude Code), tokens per minute over the last
 30 minutes, orchestrator vs each subagent, the orchestrator's prompt size,
-the last 20 tool calls (tool name plus the last two parts of a path or a
-command's first word) and the health rules checked as it runs.
+how the prompt was paid (see above), the last 20 tool calls (tool name plus
+the last two parts of a path or a command's first word), the health rules
+checked as it runs, where tokens went and what to improve (these two refresh
+every 30 seconds).
 
 A session is **Working** if its log was written in the last 2 minutes,
 **Open, waiting** if not but its CLI is still running in that folder, and
@@ -210,7 +233,10 @@ Each finding names the session, the agent, the tokens and why it matters.
 `superfan.breakdown` (`codex_outputs`, `claude_outputs`, `copilot_outputs`, `summarise`) groups
 tool calls by kind of work and estimates the tokens each kind keeps in
 context: output size times the model calls that follow it in the same
-thread. It is an estimate (characters / 4, no compaction). A call is grouped
+thread. It is an estimate (characters / 4, no compaction). The carry is also split
+into `carried_cache_read` and `carried_fresh`: the first call after an output
+takes it as new prompt, and each later call takes it at that call's own
+cache-read share (the logs report cache hits per call, not per output). A call is grouped
 first by its tool name (`TOOL_CATEGORIES`: Read, apply_patch, spawn_agent,
 MCP tools...), then a shell call by its first command (`DEFAULT_CATEGORIES`:
 kit scripts, skills and agent docs, reading files, simulator, build, git...).
@@ -222,6 +248,15 @@ also get a dollar estimate at the model's cache-read price.
 See [docs/formats.md](docs/formats.md) for what each log looks like and the
 traps (Codex subagent files that start with a copy of the parent's history;
 Claude Code responses split over several lines with the same usage).
+
+### Updating
+
+```sh
+git pull                              # on main; if git says "no tracking information":
+                                      # git branch -u origin/main main && git pull
+lsof -ti tcp:8765 | xargs kill        # stop the running serve: it keeps the port and the old code
+python3 -m superfan serve --reports ~/src ~/work
+```
 
 ## Tests
 

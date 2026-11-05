@@ -86,6 +86,60 @@ def _tz(s: str) -> timezone:
     return timezone(sign * timedelta(hours=int(h), minutes=int(m)))
 
 
+def _pct(part, whole) -> str:
+    return f"{part / whole:.0%}" if whole else "—"
+
+
+def cmd_carry(a: argparse.Namespace) -> int:
+    """One session's tokens split by input / cache read / cache write / output,
+    then its tool-output carry split into cache read and fresh, by role and by
+    category. Tokens only, so it is safe for any harness."""
+    from .parse import scan_claude, scan_codex, scan_copilot
+    from .breakdown import codex_outputs
+    until = datetime.fromisoformat(a.until).replace(tzinfo=timezone.utc) if a.until else datetime.now(timezone.utc)
+    since = until - timedelta(days=a.days)
+    root = os.path.expanduser(getattr(a, a.harness.replace("-", "_")) or "")
+    if not root:
+        print(f"--{a.harness} folder is required", file=sys.stderr)
+        return 2
+    if a.harness == "copilot":
+        sessions, (outs, _) = scan_copilot(root, since, until), copilot_outputs(root, since, until)
+    elif a.harness == "codex":
+        sessions, (outs, _) = scan_codex(root, since, until), codex_outputs(root, since, until)
+    else:
+        sessions, (outs, _) = scan_claude(root, Prices({}), since, until), claude_outputs(root, None, since, until)
+    hits = [s for sid, s in sessions.items() if sid.startswith(a.session)]
+    if len(hits) != 1:
+        print(f"{len(hits)} sessions match {a.session!r} in that window", file=sys.stderr)
+        return 1
+    s = hits[0].summary()
+    sid = s["session_id"]
+    outs = [o for o in outs if o["session"] == sid]
+    print(f"## {a.harness} {sid[:8]} ({s['start'] or '?'} to {s['end'] or '?'})\n")
+    from .advice import token_split
+    rows = token_split(s, outs)
+    print("### How the prompt was paid, per model call\n")
+    print("| who | calls | prompt | fresh input | cache write | cache read | output |")
+    print("|---|---|---|---|---|---|---|")
+    for r in rows:
+        pr = r["prompt"]
+        print(f"| {r['group']} ({r['agents']}) | {r['calls']} | {fmt_tok(pr)} | {fmt_tok(r['input'])} ({_pct(r['input'], pr)}) | "
+              f"{fmt_tok(r['cache_write'])} ({_pct(r['cache_write'], pr)}) | {fmt_tok(r['cache_read'])} ({_pct(r['cache_read'], pr)}) | "
+              f"{fmt_tok(r['output'])} |")
+    print("\n### Re-sent tool output (output size x later calls), split by how later calls took it\n")
+    print("| who | re-sent | share of prompt | as cache read | as fresh / cache write | of it file reads | file reads as cache read |")
+    print("|---|---|---|---|---|---|---|")
+    def part(r, pre, k):
+        v = r[f"{pre}_{k}"]
+        return "—" if v is None else f"{'~' if r[pre + '_estimated'] else ''}{fmt_tok(v)} ({_pct(v, r[pre])})"
+    for r in rows:
+        print(f"| {r['group']} | {fmt_tok(r['carried'])} | {_pct(r['carried'], r['prompt'])} | {part(r, 'carried', 'cache_read')} | "
+              f"{part(r, 'carried', 'fresh')} | {fmt_tok(r['reads'])} | {part(r, 'reads', 'cache_read')} |")
+    if any(r["carried_estimated"] for r in rows):
+        print("\n~ estimated: no usage per model call in this log, so the cache share comes from the session totals.")
+    return 0
+
+
 def cmd_check(a: argparse.Namespace) -> int:
     until = datetime.fromisoformat(a.until).replace(tzinfo=timezone.utc) if a.until else datetime.now(timezone.utc)
     since = until - timedelta(days=a.days)
@@ -197,6 +251,48 @@ def cmd_review(a: argparse.Namespace) -> int:
     return 1 if r["errors"] and len(r["errors"]) == len(engines) else 0
 
 
+# Finds a Chrome tab already showing the page, reloads it (the server may have
+# new code) and brings it to the front. Prints "found" or "none".
+_CHROME_FOCUS = """
+on run argv
+  set prefix to item 1 of argv
+  if application "Google Chrome" is not running then return "none"
+  tell application "Google Chrome"
+    repeat with w in windows
+      set i to 0
+      repeat with t in tabs of w
+        set i to i + 1
+        if URL of t starts with prefix then
+          set active tab index of w to i
+          set index of w to 1
+          reload t
+          activate
+          return "found"
+        end if
+      end repeat
+    end repeat
+  end tell
+  return "none"
+end run
+"""
+
+
+def open_page(url: str) -> None:
+    """Show the page: on macOS reuse an open Chrome tab on this address,
+    otherwise open a new tab in the default browser."""
+    import subprocess
+    import webbrowser
+    if sys.platform == "darwin":
+        try:
+            r = subprocess.run(["osascript", "-e", _CHROME_FOCUS, url.rstrip("/")],
+                               capture_output=True, text=True, timeout=5)
+            if r.stdout.strip() == "found":
+                return
+        except (OSError, subprocess.SubprocessError):
+            pass
+    webbrowser.open(url)
+
+
 def cmd_serve(a: argparse.Namespace) -> int:
     from .serve import serve
     cfg = _cfg(a)
@@ -204,8 +300,7 @@ def cmd_serve(a: argparse.Namespace) -> int:
     cfg["process_check"] = not a.no_process_check
     if not a.no_open:
         import threading
-        import webbrowser
-        threading.Timer(0.8, webbrowser.open, [f"http://127.0.0.1:{a.port}/"]).start()
+        threading.Timer(0.8, open_page, [f"http://127.0.0.1:{a.port}/"]).start()
     serve(cfg)
     return 0
 
@@ -227,6 +322,15 @@ def main(argv=None) -> int:
     t.add_argument("--n", type=int, default=5)
     t.add_argument("--by", choices=["tokens", "cost"], default="tokens")
     t.set_defaults(fn=cmd_top)
+    k = sub.add_parser("carry", help="one session: token split per call, and tool-output carry split into cache read / fresh")
+    k.add_argument("session", help="session id or its first characters")
+    k.add_argument("--harness", choices=["copilot", "codex", "claude"], default="copilot")
+    k.add_argument("--claude", default="~/.claude/projects")
+    k.add_argument("--codex", default="~/.codex/sessions")
+    k.add_argument("--copilot", default="~/.copilot/session-state")
+    k.add_argument("--days", type=float, default=60)
+    k.add_argument("--until", help="ISO date/time the window ends (default: now, UTC)")
+    k.set_defaults(fn=cmd_carry)
     c = sub.add_parser("check", help="run the health rules and print findings as JSON")
     c.add_argument("--claude")
     c.add_argument("--codex")
