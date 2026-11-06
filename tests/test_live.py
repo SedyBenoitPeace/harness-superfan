@@ -29,6 +29,8 @@ class Classify(unittest.TestCase):
             (["node", "/usr/local/lib/node_modules/@openai/codex/bin/codex.js"], "", False, "codex"),
             (["node", "/usr/local/bin/copilot"], "", False, "copilot"),
             (["vim", "claude.md"], "", False, None),
+            (["/Applications/Visual Studio Code.app/Contents/Frameworks/Code Helper (Plugin).app/x", "/Users/u/.vscode/extensions/github.copilot-chat/node_modules/@github/copilot-language-server/dist/language-server.js", "--stdio"], "", False, None),
+            (["node", "/usr/local/lib/node_modules/@github/copilot/index.js"], "", False, "copilot"),
             (["grep", "codex"], "", False, None),
             (["python3", "-m", "superfan", "serve"], "", False, None),
         ]
@@ -109,7 +111,7 @@ class States(unittest.TestCase):
 
     def test_without_working_folder_newest_sessions_win(self):  # Windows
         ss = self.sessions(("codex", "a", "/w/x", 500), ("codex", "b", "/w/y", 400), ("codex", "c", "/w/z", 200))
-        live.assign_states(ss, [{"harness": "codex", "pid": 1, "cwd": None}], self.NOW)
+        live.assign_states(ss, [{"harness": "codex", "pid": 1, "cwd": None, "no_cwd": True}], self.NOW)
         self.assertEqual({k[1]: (v["state"], v["by"]) for k, v in ss.items() if v["state"] != "ended"}, {"c": ("waiting", "process count")})
 
     def test_without_process_information_file_time_decides(self):
@@ -144,6 +146,21 @@ class States(unittest.TestCase):
         live.assign_states(ss, procs, self.NOW)
         self.assertEqual({k[1]: (v["state"], v["by"]) for k, v in ss.items()},
                          {"x": ("waiting", "log file open"), "y": ("ended", "no process")})
+
+    def test_no_folder_means_no_guess_where_folders_exist(self):
+        # The reported case on macOS: Codex app servers with cwd "/" and no open log were
+        # each paired with an old physio session by count.
+        ss = self.sessions(("codex", "a", "/w/physio", 3.4 * 3600), ("codex", "b", "/w/physio", 20.6 * 3600))
+        early = self.NOW - 48 * 3600
+        procs = [{"harness": "codex", "pid": 1, "cwd": "/", "start": early, "files": []},
+                 {"harness": "codex", "pid": 2, "cwd": None, "start": early, "files": []}]
+        live.assign_states(ss, procs, self.NOW)
+        self.assertEqual({k[1]: v["state"] for k, v in ss.items()}, {"a": "ended", "b": "ended"})
+        # Windows never gives folders, so there the count still decides
+        for p in procs:
+            p["no_cwd"] = True
+        live.assign_states(ss, procs, self.NOW)
+        self.assertEqual({k[1]: v["state"] for k, v in ss.items()}, {"a": "waiting", "b": "waiting"})
 
     def test_superfan_ask_folders_are_not_sessions(self):
         ss = self.sessions(("claude-code", "a", "/w/app", 900))
